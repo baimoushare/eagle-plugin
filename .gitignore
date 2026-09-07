@@ -1,0 +1,14 @@
+# 依赖(node_modules 可由 package.json + package-lock.json 恢复)
+node_modules/
+
+# 临时验证截图与调试产物(用完即删,不入库)
+_*.png
+_*.jpg
+*.log
+Thumbs.db
+desktop.ini
+
+# 编辑器/系统杂项
+.vscode/
+.idea/
+$RECYCLE.BIN/
