@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.2.0
+// @version      0.2.1
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -1320,8 +1320,25 @@
             formatProgress: function (suffix = '') {
                 const collected = TDD.harvester.awemeCache.size
                 const ratio = this.reportedTotal > 0 ? `${collected}/${this.reportedTotal}` : `${collected}/?`
-                const base = `已收 ${ratio}｜作品 ${this.successAwemes}/${this.processed.size}｜媒体 存${this.successMedia} 跳${this.skippedMedia} 败${this.failedMedia}`
+                const base = `已收 ${ratio}｜本轮已处理 ${this.processed.size}｜新存 ${this.successMedia}｜已存过跳过 ${this.skippedMedia}｜失败 ${this.failedMedia}`
                 return suffix ? `${base}｜${suffix}` : base
+            },
+
+            /**
+             * 结束态总结：与过程态分开，用一句话讲清“收了多少、新存多少、跳过多少”。
+             * 跳过 = 三层去重判定 Eagle 里已有（历史批次已保存），不是丢失。
+             */
+            formatSummary: function () {
+                const collected = TDD.harvester.awemeCache.size
+                const ratio = this.reportedTotal > 0 ? `${collected}/${this.reportedTotal}` : `${collected}`
+                const parts = [
+                    `共发现 ${ratio} 个作品`,
+                    `本次新存 ${this.successMedia}`,
+                    this.skippedMedia > 0 ? `已存过自动跳过 ${this.skippedMedia}` : '',
+                    this.failedMedia > 0 ? `失败 ${this.failedMedia}` : '',
+                    this.eagleDegraded > 0 ? `转本地保存 ${this.eagleDegraded}` : '',
+                ].filter(Boolean)
+                return parts.join('，')
             },
 
             getLimit: function () {
@@ -1431,17 +1448,17 @@
                         .filter(id => !this.processed.has(id) && !this.inFlight.has(id))
 
                     if (limit > 0 && this.processed.size >= limit) {
-                        this.setText('达到数量上限', this.formatProgress(`上限 ${limit}`))
+                        this.setText('达到数量上限，已停止', this.formatSummary())
                         break
                     }
 
                     if (pending.length === 0) {
                         if (this.reportedTotal > 0 && TDD.harvester.awemeCache.size >= this.reportedTotal) {
-                            this.setText('已收满页面标注总数', this.formatProgress(`共 ${this.reportedTotal}`))
+                            this.setText('采集完成（已收满页面总数）', this.formatSummary())
                             break
                         }
                         if (idleRounds >= maxIdle) {
-                            this.setText('连续多轮无新增，采集结束', this.formatProgress('若页面未滚到底，可手动下拉后重新开始，已完成部分会自动跳过'))
+                            this.setText('采集结束（页面已无更多内容）', this.formatSummary() + '；若还有未加载部分，可手动下拉后再开始，已完成部分会自动跳过')
                             break
                         }
                         const scroll = await TDD.harvester.scrollPageOnce()
@@ -1546,7 +1563,7 @@
                 this.renderButtons()
                 this.setText(
                     finishedByUser ? '已停止' : '采集完成',
-                    this.formatProgress(this.eagleDegraded > 0 ? `${this.eagleDegraded} 个已转本地保存` : '')
+                    this.formatSummary()
                 )
             },
 
@@ -1603,7 +1620,7 @@
 
             stop: function () {
                 this.running = false
-                this.setText('已停止', this.formatProgress())
+                this.setText('已停止', this.formatSummary())
                 this.renderButtons()
             },
         },
