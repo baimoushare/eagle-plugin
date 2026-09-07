@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.1.0
+// @version      0.2.0
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -517,6 +517,50 @@
                 this.indexFolderTree(all)
                 return all
             },
+            /**
+             * 拉取 Eagle 标签目录（含分组）。
+             * v2 标签接口在旧版 Eagle 上可能 404，回退旧接口；
+             * 不能因标签不可读误报 Eagle 未运行。
+             */
+            getTagCatalog: async function (force = false) {
+                if (!force && this.tagCatalogCache) return this.tagCatalogCache
+                let normalizedTagsResponse = null
+                try {
+                    const allTags = []
+                    let offset = 0
+                    let total = Infinity
+                    do {
+                        const tagsResponse = await this.request('/api/v2/tag/get?offset=' + offset + '&limit=50', 'GET')
+                        const page = Array.isArray(tagsResponse?.data?.data)
+                            ? tagsResponse.data.data
+                            : (Array.isArray(tagsResponse?.data) ? tagsResponse.data : [])
+                        allTags.push(...page)
+                        total = Number(tagsResponse?.data?.total || allTags.length)
+                        offset += page.length
+                        if (page.length === 0) break
+                    } while (offset < total)
+                    if (allTags.length > 0) normalizedTagsResponse = { data: allTags }
+                } catch (err) {
+                    Log.debug('[tag-v2-fallback]', err)
+                }
+                if (!normalizedTagsResponse) {
+                    normalizedTagsResponse = await this.request('/api/tag/list', 'GET')
+                }
+                let groupsResponse = null
+                try {
+                    groupsResponse = await this.request('/api/v2/tagGroup/get?offset=0&limit=500', 'GET')
+                } catch (err) {
+                    Log.debug('[tag-group-list]', err)
+                }
+                const tags = Array.isArray(normalizedTagsResponse?.data?.data)
+                    ? normalizedTagsResponse.data.data
+                    : (Array.isArray(normalizedTagsResponse?.data) ? normalizedTagsResponse.data : [])
+                const groups = Array.isArray(groupsResponse?.data?.data)
+                    ? groupsResponse.data.data
+                    : (Array.isArray(groupsResponse?.data) ? groupsResponse.data : [])
+                this.tagCatalogCache = { tags, groups }
+                return this.tagCatalogCache
+            },
             ensureFolder: async function (name, parentId = '') {
                 const safeName = this.sanitizeFolderName(name)
                 if (!safeName) return ''
@@ -867,22 +911,61 @@
             },
 
             /**
-             * 拟人滚动一屏：滚 0.85 屏高，等待页面懒加载。
-             * 返回滚动前后位置，供调用方判断是否到底。
+             * 探测作者页真实的滚动容器。
+             * 抖音作者页的滚动条多数情况下不在 window 上，而在某个
+             * overflow 容器里——只滚 window 会完全无效（表现为“不自动滚动”）。
+             * 策略（与参考实现一致）：从第一张作品卡片向上找第一个
+             * overflowY 可滚且内容超出的祖先；找不到再退回页面级容器。
+             */
+            findScrollContainer: function () {
+                const firstCard = document.querySelector(this.cardSelector)
+                let current = firstCard instanceof HTMLElement ? firstCard.parentElement : null
+                while (current instanceof HTMLElement) {
+                    const style = window.getComputedStyle(current)
+                    const isScrollable =
+                        ['auto', 'scroll', 'overlay'].includes(style.overflowY) &&
+                        current.scrollHeight > current.clientHeight + 100
+                    if (isScrollable) return current
+                    current = current.parentElement
+                }
+                return (
+                    document.querySelector('.route-scroll-container') ||
+                    document.querySelector('.parent-route-container') ||
+                    document.scrollingElement ||
+                    document.documentElement
+                )
+            },
+
+            /**
+             * 滚动一屏（0.85 屏或至少 480px），等 1.2s 供懒加载渲染。
+             * 注意用 behavior:'auto' 瞬时滚动——smooth 动画会让位置判断失真。
              */
             scrollPageOnce: async function () {
-                const before = window.scrollY || document.documentElement.scrollTop || 0
-                const viewportH = window.innerHeight || document.documentElement.clientHeight || 800
-                const delta = Math.max(360, Math.floor(viewportH * 0.85))
-                window.scrollTo({ top: before + delta, behavior: 'smooth' })
-                await TDD.sleep(1100)
-                const after = window.scrollY || document.documentElement.scrollTop || 0
-                const maxScroll = Math.max(0, (document.documentElement.scrollHeight || 0) - viewportH)
+                const container = this.findScrollContainer()
+                if (!container) return { changed: false, atBottom: true }
+                const isDocumentScroll =
+                    container === document.body ||
+                    container === document.documentElement ||
+                    container === document.scrollingElement
+                const beforeTop = isDocumentScroll ? (window.scrollY || document.documentElement.scrollTop || 0) : container.scrollTop
+                const clientHeight = isDocumentScroll ? (window.innerHeight || document.documentElement.clientHeight || 800) : container.clientHeight
+                const scrollHeight = container.scrollHeight
+                const maxTop = Math.max(0, scrollHeight - clientHeight)
+                const nextTop = Math.min(beforeTop + Math.max(Math.floor(clientHeight * 0.85), 480), maxTop)
+
+                if (nextTop <= beforeTop + 4) {
+                    return { changed: false, atBottom: true }
+                }
+                if (isDocumentScroll) {
+                    window.scrollTo({ top: nextTop, behavior: 'auto' })
+                } else {
+                    container.scrollTo({ top: nextTop, behavior: 'auto' })
+                }
+                await TDD.sleep(1200)
+                const afterTop = isDocumentScroll ? (window.scrollY || document.documentElement.scrollTop || 0) : container.scrollTop
                 return {
-                    before,
-                    after,
-                    changed: after > before + 40,
-                    atBottom: after >= maxScroll - 40,
+                    changed: afterTop > beforeTop + 40,
+                    atBottom: afterTop >= maxTop - 40,
                 }
             },
         },
@@ -1056,10 +1139,15 @@
             folderLimitEl: null,
             eagleDegraded: 0,
             localDirHandle: null,
+            reportedTotal: 0,
             selectedTags: [],
+            recentTags: [],
+            eagleTags: [],
+            tagCatalogLoading: false,
 
             init: function () {
                 if (this.panel) return
+                this.recentTags = Array.isArray(GM_getValue('edd_recent_tags', [])) ? GM_getValue('edd_recent_tags', []) : []
                 const launcher = document.createElement('button')
                 launcher.type = 'button'
                 launcher.className = 'edd-launcher'
@@ -1079,9 +1167,10 @@
   <select class="edd-select" data-action="folder-select"><option value="">自动目录（抖音/作者）</option></select>
 </div>
 <div class="edd-field">
-  <div class="edd-label">标签（回车添加，仅保存到 Eagle）</div>
-  <input class="edd-input" data-action="tags-input" placeholder="输入标签后按 Enter" />
+  <div class="edd-label">标签（从 Eagle 点选或输入回车，仅保存到 Eagle）</div>
+  <input class="edd-input" data-action="tags-input" placeholder="搜索/输入标签后按 Enter" />
   <div class="edd-tags" data-action="tags-view"></div>
+  <div class="edd-tag-catalog" data-action="tags-catalog">标签目录加载中...</div>
 </div>
 <div class="edd-field">
   <div class="edd-label">数量上限（0 = 采集全部）</div>
@@ -1106,10 +1195,12 @@
                 this.folderLimitEl = panel.querySelector('[data-action="limit-input"]')
                 this.tagsInputEl = panel.querySelector('[data-action="tags-input"]')
                 this.tagsViewEl = panel.querySelector('[data-action="tags-view"]')
+                this.tagsCatalogEl = panel.querySelector('[data-action="tags-catalog"]')
 
                 this.folderSelectEl.onchange = async () => {
                     await GM_setValue('edd_selected_folder_id', String(this.folderSelectEl.value || ''))
                 }
+                this.tagsInputEl.oninput = () => this.renderTagCatalog()
                 this.tagsInputEl.onkeydown = (event) => {
                     if (event.key !== 'Enter') return
                     event.preventDefault()
@@ -1118,6 +1209,7 @@
                     if (!this.selectedTags.includes(value)) this.selectedTags.push(value)
                     this.tagsInputEl.value = ''
                     this.renderTags()
+                    this.renderTagCatalog()
                 }
                 panel.querySelector('[data-action="eagle"]').onclick = () => this.start('eagle')
                 panel.querySelector('[data-action="download"]').onclick = () => this.start('download')
@@ -1125,6 +1217,21 @@
                 panel.querySelector('[data-action="stop"]').onclick = () => this.stop()
                 this.renderTags()
                 this.restoreFolderSelection()
+
+                // 面板每次展开时刷新 Eagle 目录与标签（Eagle 未运行则静默保持占位提示）
+                launcher.onclick = () => {
+                    const open = panel.classList.toggle('is-open')
+                    launcher.classList.toggle('is-open', open)
+                    if (open) {
+                        this.refreshFolderOptions()
+                        this.loadTagCatalog()
+                    }
+                }
+                // 初始化 1.2s 后也预拉一次，用户第一次展开就能看到可选项
+                setTimeout(() => {
+                    this.refreshFolderOptions()
+                    this.loadTagCatalog()
+                }, 1200)
             },
 
             renderTags: function () {
@@ -1133,13 +1240,75 @@
                 for (const tag of this.selectedTags) {
                     const chip = document.createElement('button')
                     chip.type = 'button'
-                    chip.className = 'edd-tag-chip'
+                    chip.className = 'edd-tag-chip is-selected'
                     chip.textContent = tag + ' ×'
                     chip.onclick = () => {
                         this.selectedTags = this.selectedTags.filter(t => t !== tag)
                         this.renderTags()
+                        this.renderTagCatalog()
                     }
                     this.tagsViewEl.appendChild(chip)
+                }
+                // 选中变化即持久化最近使用，供下次打开面板时快速再选
+                const merged = Array.from(new Set([...this.selectedTags, ...(this.recentTags || [])])).slice(0, 12)
+                this.recentTags = merged
+                GM_setValue('edd_recent_tags', merged)
+            },
+
+            /**
+             * 从 Eagle 拉取标签目录渲染为可点选 chip 流。
+             * Eagle 未运行/拉取失败时显示提示文案，不影响其他功能。
+             */
+            loadTagCatalog: async function () {
+                if (!this.tagsCatalogEl) return
+                if (this.tagCatalogLoading) return
+                this.tagCatalogLoading = true
+                try {
+                    const catalog = await TDD.eagle.getTagCatalog()
+                    this.eagleTags = Array.isArray(catalog?.tags) ? catalog.tags : []
+                    this.renderTagCatalog()
+                } catch (err) {
+                    if (this.tagsCatalogEl) {
+                        this.tagsCatalogEl.textContent = '标签目录不可用（Eagle 未运行或接口异常）'
+                    }
+                } finally {
+                    this.tagCatalogLoading = false
+                }
+            },
+
+            renderTagCatalog: function () {
+                if (!this.tagsCatalogEl) return
+                if (!Array.isArray(this.eagleTags) || this.eagleTags.length === 0) {
+                    this.tagsCatalogEl.textContent = this.tagCatalogLoading ? '标签目录加载中...' : 'Eagle 暂无标签，可手动输入'
+                    return
+                }
+                const keyword = String(this.tagsInputEl?.value || '').trim().toLowerCase()
+                const names = this.eagleTags
+                    .map(tag => String(tag?.name || '').trim())
+                    .filter(Boolean)
+                const filtered = keyword
+                    ? names.filter(name => name.toLowerCase().includes(keyword))
+                    : names.slice(0, 60)
+                this.tagsCatalogEl.innerHTML = ''
+                if (filtered.length === 0) {
+                    this.tagsCatalogEl.textContent = '无匹配标签，回车可直接创建'
+                    return
+                }
+                for (const name of filtered) {
+                    const chip = document.createElement('button')
+                    chip.type = 'button'
+                    chip.className = 'edd-tag-catalog-chip' + (this.selectedTags.includes(name) ? ' is-selected' : '')
+                    chip.textContent = name
+                    chip.onclick = () => {
+                        if (this.selectedTags.includes(name)) {
+                            this.selectedTags = this.selectedTags.filter(t => t !== name)
+                        } else {
+                            this.selectedTags.push(name)
+                        }
+                        this.renderTags()
+                        this.renderTagCatalog()
+                    }
+                    this.tagsCatalogEl.appendChild(chip)
                 }
             },
 
@@ -1149,8 +1318,9 @@
             },
 
             formatProgress: function (suffix = '') {
-                const total = this.processed.size
-                const base = `作品 ${this.successAwemes}/${total}｜媒体 成功${this.successMedia} 跳过${this.skippedMedia} 失败${this.failedMedia}`
+                const collected = TDD.harvester.awemeCache.size
+                const ratio = this.reportedTotal > 0 ? `${collected}/${this.reportedTotal}` : `${collected}/?`
+                const base = `已收 ${ratio}｜作品 ${this.successAwemes}/${this.processed.size}｜媒体 存${this.successMedia} 跳${this.skippedMedia} 败${this.failedMedia}`
                 return suffix ? `${base}｜${suffix}` : base
             },
 
@@ -1249,7 +1419,7 @@
                 this.setText(mode === 'download' ? '本地下载中' : '正在存入 Eagle', '开始扫描页面...')
 
                 const limit = this.getLimit()
-                const reportedTotal = TDD.harvester.getReportedTotal()
+                this.reportedTotal = TDD.harvester.getReportedTotal()
                 let idleRounds = 0
                 const maxIdle = 8
 
@@ -1266,12 +1436,12 @@
                     }
 
                     if (pending.length === 0) {
-                        if (reportedTotal > 0 && TDD.harvester.awemeCache.size >= reportedTotal) {
-                            this.setText('已收满页面标注总数', this.formatProgress(`共 ${reportedTotal}`))
+                        if (this.reportedTotal > 0 && TDD.harvester.awemeCache.size >= this.reportedTotal) {
+                            this.setText('已收满页面标注总数', this.formatProgress(`共 ${this.reportedTotal}`))
                             break
                         }
                         if (idleRounds >= maxIdle) {
-                            this.setText('连续多轮无新增，采集结束', this.formatProgress())
+                            this.setText('连续多轮无新增，采集结束', this.formatProgress('若页面未滚到底，可手动下拉后重新开始，已完成部分会自动跳过'))
                             break
                         }
                         const scroll = await TDD.harvester.scrollPageOnce()
@@ -1286,7 +1456,7 @@
                         }
                         this.setText(
                             mode === 'download' ? '本地下载中' : '正在存入 Eagle',
-                            this.formatProgress(`滚动加载中 ${TDD.harvester.awemeCache.size}/${reportedTotal || '?'}（空转 ${idleRounds}/${maxIdle}）`)
+                            this.formatProgress(`滚动加载中（空转 ${idleRounds}/${maxIdle}）`)
                         )
                         continue
                     }
@@ -1460,6 +1630,13 @@
 .edd-tags {display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px;}
 .edd-tag-chip {padding: 3px 8px; border: 1px solid rgba(255,255,255,0.12); border-radius: 7px; background: rgba(255,255,255,0.06); color: rgba(237,241,247,0.88); font-size: 11px; cursor: pointer;}
 .edd-tag-chip:hover {background: rgba(255,255,255,0.12); color: #fff;}
+.edd-tag-chip.is-selected {border-color: rgba(177,215,248,0.7); background: rgba(177,215,248,0.18); color: #fff;}
+.edd-tag-catalog {margin-top: 6px; max-height: 96px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start; font-size: 11px; color: rgba(235,240,248,0.46); scrollbar-width: thin;}
+.edd-tag-catalog::-webkit-scrollbar {width: 6px;}
+.edd-tag-catalog::-webkit-scrollbar-thumb {background: rgba(255,255,255,0.16); border-radius: 999px;}
+.edd-tag-catalog-chip {padding: 2px 7px; border: 1px solid rgba(255,255,255,0.10); border-radius: 6px; background: transparent; color: rgba(237,241,247,0.72); font-size: 11px; cursor: pointer;}
+.edd-tag-catalog-chip:hover {background: rgba(255,255,255,0.10); color: #fff;}
+.edd-tag-catalog-chip.is-selected {border-color: rgba(177,215,248,0.7); background: rgba(177,215,248,0.18); color: #fff;}
 .edd-actions {display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;}
 .edd-btn {appearance: none; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.06); color: #f5f7fb; border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 500; cursor: pointer; transition: transform 140ms ease, background 180ms ease;}
 .edd-btn:hover {background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.18); transform: translateY(-1px);}
