@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.4.0
+// @version      0.4.1
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
 // @supportURL   mailto:www.774466655@qq.com
 // @match        *://www.douyin.com/*
 // @match        *://douyin.com/*
-// @require      https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
+// @require      https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_getValue

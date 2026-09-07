@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.0.1
+// @version      1.0.2
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
 // @supportURL   mailto:www.774466655@qq.com
 // @match        *://www.fab.com/*
 // @match        *://fab.com/*
-// // @require      https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
+// @require      https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_getValue

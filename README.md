@@ -6,26 +6,36 @@
 
 | 脚本 | 版本 | 适用站点 | 功能 |
 |---|---|---|---|
-| `eagle-fab-collector.user.js` | 1.0.1 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
-| `eagle-web-collector.user.js` | 1.1.12 | Fab.com、E-Hentai、ExHentai | 综合版,批量采集页面图片,自动匹配站点目录与标签 |
-| `eagle-x-collector.user.js` | 1.2.0 | X(Twitter) | 一键下载推文图片/视频/音频,批量采集时间线与"喜欢",三层去重(本地索引 + Eagle 查重 + URL 兜底) |
-| `eagle-douyin-collector.user.js` | 0.4.0 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
+| `eagle-fab-collector.user.js` | 1.0.2 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
+| `eagle-web-collector.user.js` | 1.1.13 | Fab.com、E-Hentai、ExHentai | 综合版,批量采集页面图片,自动匹配站点目录与标签 |
+| `eagle-x-collector.user.js` | 1.2.1 | X(Twitter) | 一键下载推文图片/视频/音频,批量采集时间线与"喜欢",三层去重(本地索引 + Eagle 查重 + URL 兜底) |
+| `eagle-douyin-collector.user.js` | 0.4.1 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
 
 所有脚本均支持两种保存方式:存入 Eagle / 本地 zip 打包下载。
 
 ## 共享 UI 设计库(eagle-ui.js)
 
-各脚本的前端界面统一由 `eagle-ui.js` 提供(设计基因源自 Fab 面板:毛玻璃、白玻璃控件、蓝色选中态),脚本通过 `@require` 引用,改一处全家族生效:
+各脚本的前端界面统一由 `eagle-ui.js` 提供(设计基因源自 Fab 面板:毛玻璃、白玻璃控件、蓝色选中态),脚本通过 `@require` 引用,改一处全家族生效。
+
+### 引用地址(Greasy Fork Library)
+
+`eagle-ui.js` 以 [Greasy Fork Library「Eagle Collector UI」](https://greasyfork.org/zh-CN/scripts/594761) 形式分发,四个脚本统一引用(**省略版本号的地址永远指向最新版**,不要用带 `/1924684/` 版本段的链接):
 
 ```
-// @require https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
+// @require https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
 ```
+
+- Library 的源码同步地址:`https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-ui.js`(Greasy Fork 定期拉取,配置 GitHub Webhook 后 push 即同步)
+- jsDelivr 直链方案已停用(Greasy Fork 不接受自有 jsDelivr 文件作为外部 @require)
+- 同步配置详见 [GitHub 与 Greasy Fork 自动同步操作](docs/greasy-fork/GitHub与Greasy-Fork自动同步操作.md)
+
+## 版本与同步
 
 - 组件:悬浮启动钮、面板容器(含采集中 running 阴影态)、**文件夹树选择弹层**(搜索+树+多选/单选+动态根目录文案+可选刷新按钮)、**标签选择弹层**(搜索+已选 chips+最近使用+可选分组+勾选列表+手动输入+可选刷新按钮)、进度条、版本徽标
-- 接入状态:抖音版(0.4.0)、X 版(1.2.0)已完整迁移;Fab 版(1.0.1)、综合版(1.1.12)已挂载库并显示版本徽标,面板完整迁移待库补齐折叠面板/模式卡片/连接状态等 fab 专属组件后进行
+- 接入状态:抖音版(0.4.1)、X 版(1.2.1)已完整迁移;Fab 版(1.0.2)、综合版(1.1.13)已挂载库并显示版本徽标,面板完整迁移待库补齐折叠面板/模式卡片/连接状态等 fab 专属组件后进行
 - 确认当前版本:面板标题旁的"UI x.y.z"徽标 / 控制台 `window.EagleUI.version`
 - 本地预览:仓库根起 `python -m http.server 8799`,浏览器开 `_tm_tools/ui-preview-eagle-ui.html`(含模拟 Eagle 数据,可点验两个选择器交互)
-- 更新流程:修改 `eagle-ui.js` → push 到 GitHub main 分支 → 浏览器访问 `https://purge.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js` 清 CDN 缓存 → 已安装用户最迟一周内(Tampermonkey 外部脚本默认每周检查)自动换新;脚本版本号 +0.0.1 重存可强制立即刷新
+- 日常更新:改 `eagle-ui.js` → bump 库版本与四个脚本 `@version` → push → Greasy Fork(Webhook/轮询)同步 Library 与四个脚本 → 用户端 Tampermonkey 更新时重新拉取库
 
 ## 安装
 
@@ -55,4 +65,6 @@
 
 ## 许可
 
-Copyright (c) 2026 laobai. All rights reserved. 详见 [docs/greasy-fork/脚本使用许可.md](docs/greasy-fork/脚本使用许可.md)
+本项目为**源码公开、非开源**项目:版权所有 (c) 2026 laobai,保留所有权利。允许个人安装使用与本地修改,禁止未经授权公开发布修改版、镜像搬运与商业再分发。完整条款见根目录 [LICENSE](LICENSE),导览说明见 [docs/greasy-fork/脚本使用许可.md](docs/greasy-fork/脚本使用许可.md)。
+
+第三方代码例外:`eagle-x-collector.user.js` 含上游 MIT 代码,JSZip 为 MIT 运行时依赖,均按其原许可证执行,详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
