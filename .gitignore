@@ -12,3 +12,6 @@ desktop.ini
 .vscode/
 .idea/
 $RECYCLE.BIN/
+
+# ZCode 会话临时文件
+.zcode/
