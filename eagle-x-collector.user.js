@@ -256,10 +256,11 @@
 // @connect            localhost
 // @connect            127.0.0.1
 // @connect            *
-// @version            1.1.13
+// @version            1.2.0
 // @created            2025-03-11 08:11:29
 // @modified           2026-08-28 11:05:00
 // @require            https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
+// @require            https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
 // 本地定制脚本不保留上游自动更新地址，避免 Tampermonkey 用原版覆盖 Eagle 集成。
 // ==/UserScript==
 
@@ -2520,23 +2521,14 @@ const TMD = (function () {
             launcher: null,
             statusEl: null,
             progressEl: null,
-            folderSelectEl: null,
-            folderSearchEl: null,
-            folderList: [],
-            folderExpandedIds: new Set(),
-            folderRecentEl: null,
-            tagSearchEl: null,
-            tagListEl: null,
-            tagRecentEl: null,
+            folderPicker: null,
+            tagPicker: null,
             ctx: null,
             selectedTags: [],
             recentTags: [],
             eagleTags: [],
             eagleTagGroups: [],
-            tagGroupsCollapsed: new Set(),
             tagCatalogLoading: false,
-            tagCatalogError: '',
-            tagSearchKeyword: '',
             timelineCursor: '',
             timelineExhausted: false,
             timelineGraphQLFailed: false,
@@ -2549,565 +2541,125 @@ const TMD = (function () {
                 this.ctx = ctx
                 this.selectedTags = Array.isArray(eagle_selected_tags) ? [...eagle_selected_tags] : []
                 this.recentTags = Array.isArray(eagle_recent_tags) ? [...eagle_recent_tags] : []
-                const launcher = document.createElement('button')
-                launcher.type = 'button'
-                launcher.className = 'tmd-batch-launcher'
-                launcher.title = lang.batch_title
-                launcher.setAttribute('aria-label', lang.batch_title)
-                launcher.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7M8 15.5h7.5M18.4 6.2v10.1M15.9 13.9l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                // UI 外壳交给家族共享库（eagle-ui.js）：样式、开合动画、两个选择器弹层统一由库维护，
+                // 本脚本只保留 X 数据源（GraphQL/滚动）与批量主循环。
+                const launcherHandle = EagleUI.createLauncher({
+                    title: lang.batch_title,
+                    icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7M8 15.5h7.5M18.4 6.2v10.1M15.9 13.9l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                })
+                const launcher = launcherHandle.el
                 document.body.appendChild(launcher)
                 this.launcher = launcher
-                const panel = document.createElement('div')
-                panel.className = 'tmd-batch-panel'
+
+                const panelHandle = EagleUI.createPanel({})
+                const panel = panelHandle.el
                 panel.innerHTML = `
-<div class="tmd-batch-title">${lang.batch_title}</div>
-<div class="tmd-batch-status">${lang.batch_idle}</div>
-<div class="tmd-batch-progress">${lang.batch_idle}</div>
-<div class="tmd-batch-folder">
-  <div class="tmd-batch-folder-label">Eagle &#x76EE;&#x6807;&#x6587;&#x4EF6;&#x5939;</div>
-  <div class="tmd-batch-picker" data-picker="folder">
-    <select class="tmd-batch-folder-select" data-action="folder-select" aria-hidden="true"></select>
-    <button type="button" class="tmd-batch-picker-trigger" data-action="folder-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-action="folder-label">自动目录 / 根目录</span><span class="tmd-batch-picker-meta">选择</span></button>
-    <div class="tmd-batch-picker-menu" data-action="folder-menu" role="listbox" aria-label="Eagle 文件夹树">
-      <div class="tmd-batch-picker-head"><input class="tmd-batch-folder-search" data-action="folder-search" placeholder="&#x641C;&#x7D22;&#x6587;&#x4EF6;&#x5939;..." /><span>选择目标</span></div>
-      <div class="tmd-batch-folder-recent" data-action="folder-recent"></div>
-      <div class="tmd-batch-folder-tree" data-action="folder-tree"></div>
-      <div class="tmd-batch-picker-footer"><span>勾选选择</span><span>点击名称展开</span><span>Esc 关闭</span></div>
-    </div>
-  </div>
-  <button type="button" class="tmd-batch-folder-refresh" data-action="folder-refresh">&#x5237;&#x65B0;&#x76EE;&#x5F55;</button>
+<div class="egc-title">${lang.batch_title}<span class="egc-version">UI ${EagleUI.version}</span></div>
+<div class="egc-status">${lang.batch_idle}</div>
+<div class="egc-progress">${lang.batch_idle}</div>
+<div class="egc-field">
+  <div class="egc-label">Eagle 目标文件夹</div>
+  <div data-slot="folder-picker"></div>
 </div>
-<div class="tmd-batch-folder tmd-batch-tags">
-  <div class="tmd-batch-folder-label">标签（仅保存到 Eagle）</div>
-  <div class="tmd-batch-picker" data-picker="tags">
-    <button type="button" class="tmd-batch-picker-trigger" data-action="tags-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-action="tags-label">未选择标签</span><span class="tmd-batch-picker-meta" data-action="tags-meta">添加标签</span></button>
-    <div class="tmd-batch-picker-menu tmd-batch-tags-menu" data-action="tags-menu" role="listbox" aria-label="Eagle 标签列表">
-      <div class="tmd-batch-picker-head"><input class="tmd-batch-tag-search" data-action="tags-search" placeholder="&#x641C;&#x7D22;&#x6807;&#x7B7E;..." /><span>可多选</span><button type="button" class="tmd-batch-picker-refresh" data-action="tags-refresh">刷新标签</button></div>
-      <div class="tmd-batch-tag-recent" data-action="tags-recent"></div>
-      <div class="tmd-batch-tag-list" data-action="tags-list"></div>
-      <input class="tmd-batch-tag-manual" data-action="tags-manual" placeholder="手动输入标签，回车添加" />
-      <div class="tmd-batch-picker-footer"><span>点击切换</span><span>Enter 完成</span><span>Esc 关闭</span></div>
-    </div>
-  </div>
+<div class="egc-field">
+  <div class="egc-label">标签（仅保存到 Eagle）</div>
+  <div data-slot="tag-picker"></div>
 </div>
-<div class="tmd-batch-actions">
-  <button type="button" class="tmd-batch-btn primary" data-action="download">${lang.batch_download}</button>
-  <button type="button" class="tmd-batch-btn" data-action="eagle">${lang.save_to_eagle}</button>
-  <button type="button" class="tmd-batch-btn ghost" data-action="stop">${lang.stop}</button>
+<div class="egc-actions">
+  <button type="button" class="egc-btn primary" data-action="download">${lang.batch_download}</button>
+  <button type="button" class="egc-btn" data-action="eagle">${lang.save_to_eagle}</button>
+  <button type="button" class="egc-btn ghost" data-action="stop">${lang.stop}</button>
 </div>
 `
                 document.body.appendChild(panel)
                 this.panel = panel
                 launcher.onclick = () => {
-                    const open = panel.classList.toggle('is-open')
-                    launcher.classList.toggle('is-open', open)
+                    const open = panelHandle.toggle()
+                    launcherHandle.setOpen(open)
                     launcher.setAttribute('aria-expanded', open ? 'true' : 'false')
                 }
-                this.statusEl = panel.querySelector('.tmd-batch-status')
-                this.progressEl = panel.querySelector('.tmd-batch-progress')
-                this.folderSelectEl = panel.querySelector('[data-action="folder-select"]')
-                this.folderSearchEl = panel.querySelector('[data-action="folder-search"]')
-                this.folderTreeEl = panel.querySelector('[data-action="folder-tree"]')
-                this.folderRecentEl = panel.querySelector('[data-action="folder-recent"]')
-                this.tagSearchEl = panel.querySelector('[data-action="tags-search"]')
-                this.tagListEl = panel.querySelector('[data-action="tags-list"]')
-                this.tagRecentEl = panel.querySelector('[data-action="tags-recent"]')
+                this.statusEl = panel.querySelector('.egc-status')
+                this.progressEl = panel.querySelector('.egc-progress')
 
-                if (this.folderSelectEl) {
-                    this.folderSelectEl.onchange = async () => {
-                        eagle_selected_folder_id = String(this.folderSelectEl.value || '')
-                        await GM_setValue('eagle_selected_folder_id', eagle_selected_folder_id)
-                        this.renderFolderOptions(ctx, this.folderSearchEl ? this.folderSearchEl.value : '')
-                    }
-                }
-                if (this.folderSearchEl) {
-                    this.folderSearchEl.oninput = () => this.renderFolderOptions(ctx, this.folderSearchEl.value)
-                }
-                const folderTrigger = panel.querySelector('[data-action="folder-trigger"]')
-                const folderMenu = panel.querySelector('[data-action="folder-menu"]')
-                if (folderTrigger) folderTrigger.onclick = (event) => { event.stopPropagation(); this.togglePicker('folder') }
-                if (folderMenu) folderMenu.onclick = (event) => event.stopPropagation()
-                const tagsTrigger = panel.querySelector('[data-action="tags-trigger"]')
-                const tagsMenu = panel.querySelector('[data-action="tags-menu"]')
-                if (tagsTrigger) tagsTrigger.onclick = (event) => { event.stopPropagation(); this.togglePicker('tags') }
-                if (tagsMenu) tagsMenu.onclick = (event) => event.stopPropagation()
-                if (this.tagSearchEl) this.tagSearchEl.oninput = () => { this.tagSearchKeyword = String(this.tagSearchEl.value || '').trim().toLowerCase(); this.renderTagOptions(ctx) }
-                const tagRefresh = panel.querySelector('[data-action="tags-refresh"]')
-                if (tagRefresh) tagRefresh.onclick = () => this.refreshEagleTags(true)
-                const manualTagInput = panel.querySelector('[data-action="tags-manual"]')
-                if (manualTagInput) manualTagInput.onkeydown = (event) => {
-                    if (event.key !== 'Enter') return
-                    event.preventDefault()
-                    const value = String(manualTagInput.value || '').trim()
-                    if (!value) return
-                    this.toggleTag(value, true)
-                    manualTagInput.value = ''
-                }
-                document.addEventListener('click', () => this.closePickers())
-                document.addEventListener('keydown', (event) => {
-                    if (event.key === 'Escape') this.closePickers()
-                    if (event.key === 'Enter' && this.isPickerOpen('tags') && event.target !== manualTagInput) { event.preventDefault(); this.closePickers() }
+                // 文件夹选择器:fab 同款弹层(搜索+树+单选+刷新),选择写入全局变量与 GM 存储(键不变)
+                this.folderPicker = EagleUI.createFolderPicker({
+                    multiple: false,
+                    rootLabel: () => `自动目录：${ctx.getEagleRootPathText()} / ${ctx.getEagleChildTemplateText()}`,
+                    onRefresh: () => this.refreshFolderOptions(ctx, true),
+                    onChange: (ids) => {
+                        eagle_selected_folder_id = String(ids[0] || '')
+                        GM_setValue('eagle_selected_folder_id', eagle_selected_folder_id)
+                    },
                 })
-                window.addEventListener('resize', () => this.positionOpenPicker())
-                const folderRefreshBtn = panel.querySelector('[data-action="folder-refresh"]')
-                if (folderRefreshBtn) {
-                    folderRefreshBtn.onclick = () => this.refreshFolderOptions(ctx, true)
-                }
-                this.renderFolderOptions(ctx)
-                this.renderTagOptions(ctx)
-                this.syncFolderLabel()
-                this.syncTagLabel()
-                this.refreshFolderOptions(ctx, false)
+                if (eagle_selected_folder_id) this.folderPicker.setSelected([eagle_selected_folder_id])
+                panel.querySelector('[data-slot="folder-picker"]').appendChild(this.folderPicker.el)
+
+                // 标签选择器:搜索+已选chips+最近+分组勾选列表+手输,持久化键沿用 eagle_selected_tags/eagle_recent_tags
+                this.tagPicker = EagleUI.createTagPicker({
+                    selected: this.selectedTags,
+                    recent: this.recentTags,
+                    onRefresh: () => this.refreshEagleTags(true),
+                    onChange: (selected) => {
+                        this.selectedTags = selected
+                        eagle_selected_tags = [...selected]
+                        GM_setValue('eagle_selected_tags', eagle_selected_tags)
+                    },
+                    onRecentChange: (recent) => {
+                        this.recentTags = recent
+                        eagle_recent_tags = [...recent]
+                        GM_setValue('eagle_recent_tags', eagle_recent_tags)
+                    },
+                })
+                panel.querySelector('[data-slot="tag-picker"]').appendChild(this.tagPicker.el)
 
                 panel.querySelector('[data-action="download"]').onclick = () => this.start(ctx, 'download')
                 panel.querySelector('[data-action="eagle"]').onclick = () => this.start(ctx, 'eagle')
                 panel.querySelector('[data-action="stop"]').onclick = () => this.stop()
+                this.refreshFolderOptions(ctx, false)
+                this.refreshEagleTags(false)
                 this.renderButtons()
             },
+
             setText: function (status, progress) {
                 if (this.statusEl && typeof status !== 'undefined') this.statusEl.textContent = status
                 if (this.progressEl && typeof progress !== 'undefined') this.progressEl.textContent = progress
             },
             /**
-             * ?? Eagle ???????????????????????? Eagle ????
+             * 拉取 Eagle 文件夹树灌入共享库选择器（保留层级；失败时保留上次的树）。
              */
             refreshFolderOptions: async function (ctx, force = false) {
-                if (!this.folderSelectEl) return
+                if (!this.folderPicker) return
                 try {
                     const folders = await ctx.eagle.getFolders(!!force)
-                    this.folderList = ctx.flattenEagleFolders(folders)
-                    if (this.folderExpandedIds.size === 0) {
-                        this.folderExpandedIds = new Set((Array.isArray(folders) ? folders : []).filter(folder => folder && folder.id).map(folder => String(folder.id)))
-                    }
-                    this.renderFolderOptions(ctx, this.folderSearchEl ? this.folderSearchEl.value : '')
+                    this.folderPicker.setFolders(Array.isArray(folders) ? folders : [])
                 } catch (err) {
-                    this.folderList = []
-                    this.renderFolderOptions(ctx, '')
-                    if (this.folderSelectEl) {
-                        const opt = document.createElement('option')
-                        opt.value = eagle_selected_folder_id || ''
-                        opt.textContent = 'Eagle \u672a\u8fde\u63a5\uff0c\u4fdd\u7559\u4e0a\u6b21\u9009\u62e9'
-                        this.folderSelectEl.appendChild(opt)
-                    }
                     console.debug('[TMD][Eagle][folder-list]', err)
                 }
             },
+
             /**
-             * ???????????????? select??????????? X ?????????
+             * 拉取 Eagle 标签目录（含分组）灌入共享库选择器。
              */
-            renderFolderOptions: function (ctx, keyword = '') {
-                if (!this.folderSelectEl) return
-                const select = this.folderSelectEl
-                const tree = this.folderTreeEl
-                const currentValue = String(eagle_selected_folder_id || '')
-                const normalizedKeyword = String(keyword || '').trim().toLowerCase()
-                select.innerHTML = ''
-                if (tree) tree.innerHTML = ''
-
-                const defaultOption = document.createElement('option')
-                defaultOption.value = ''
-                defaultOption.textContent = `\u81ea\u52a8\u76ee\u5f55\uff1a${ctx.getEagleRootPathText()} / ${ctx.getEagleChildTemplateText()}`
-                select.appendChild(defaultOption)
-
-                const matched = (this.folderList || []).filter(folder => {
-                    if (!normalizedKeyword) return true
-                    return String(folder.path || folder.name || '').toLowerCase().includes(normalizedKeyword)
-                })
-                for (const folder of matched) {
-                    const opt = document.createElement('option')
-                    opt.value = folder.id
-                    opt.title = folder.path
-                    opt.textContent = folder.path || folder.name
-                    select.appendChild(opt)
-                }
-
-                const hasCurrent = Array.from(select.options).some(opt => opt.value === currentValue)
-                if (currentValue && !hasCurrent) {
-                    const opt = document.createElement('option')
-                    opt.value = currentValue
-                    opt.textContent = '\u5df2\u9009\u6587\u4ef6\u5939\uff08\u641c\u7d22\u7ed3\u679c\u5916\uff09'
-                    select.appendChild(opt)
-                }
-                select.value = hasCurrent || currentValue ? currentValue : ''
-                if (this.folderRecentEl) {
-                    this.folderRecentEl.innerHTML = ''
-                    const current = currentValue ? this.folderList.find(folder => String(folder.id) === currentValue) : null
-                    this.folderRecentEl.classList.toggle('has-items', !!current && !normalizedKeyword)
-                    if (current && !normalizedKeyword) {
-                        const chip = document.createElement('button')
-                        chip.type = 'button'
-                        chip.className = 'tmd-batch-recent-chip'
-                        chip.textContent = `最近：${current.path || current.name}`
-                        chip.onclick = () => { this.syncFolderLabel(); this.closePickers() }
-                        this.folderRecentEl.appendChild(chip)
-                    }
-                }
-
-                if (!tree) return
-                const visibleIds = new Set(matched.map(folder => String(folder.id)))
-                const appendNode = (node, depth = 0, parent = tree, forceExpand = false) => {
-                    if (!node || !node.id) return false
-                    const children = Array.isArray(node.children) ? node.children : []
-                    const selfMatched = !normalizedKeyword || String(node.name || '').toLowerCase().includes(normalizedKeyword)
-                    const childMatched = children.some(child => visibleIds.has(String(child.id)) || childHasMatch(child))
-                    if (!selfMatched && !childMatched) return false
-
-                    const row = document.createElement('div')
-                    row.className = 'tmd-batch-folder-node' + (String(node.id) === currentValue ? ' is-selected' : '')
-                    row.style.paddingLeft = `${8 + depth * 14}px`
-                    row.setAttribute('role', 'option')
-                    row.setAttribute('aria-selected', String(node.id) === currentValue ? 'true' : 'false')
-                    const checkbox = document.createElement('button')
-                    checkbox.type = 'button'
-                    checkbox.className = 'tmd-batch-folder-checkbox' + (String(node.id) === currentValue ? ' is-checked' : '')
-                    checkbox.setAttribute('aria-label', (String(node.id) === currentValue ? '取消选择' : '选择') + '文件夹 ' + String(node.name || '未命名文件夹'))
-                    checkbox.innerHTML = String(node.id) === currentValue ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.2l3.1 3.1 6.5-6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''
-                    checkbox.addEventListener('click', (event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        event.stopImmediatePropagation()
-                        eagle_selected_folder_id = String(node.id)
-                        this.folderSelectEl.value = eagle_selected_folder_id
-                        GM_setValue('eagle_selected_folder_id', eagle_selected_folder_id)
-                        this.renderFolderOptions(ctx, keyword)
-                        this.syncFolderLabel()
-                    }, true)
-                    row.appendChild(checkbox)
-                    const icon = document.createElement('span')
-                    icon.className = 'tmd-batch-folder-icon'
-                    icon.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.6h5l1.5 1.8h7.9v7.1a1.8 1.8 0 0 1-1.8 1.8H4.6a1.8 1.8 0 0 1-1.8-1.8V5.6Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/></svg>'
-                    row.appendChild(icon)
-
-                    const toggle = document.createElement('span')
-                    toggle.className = 'tmd-batch-folder-toggle' + (this.folderExpandedIds.has(node.id) || forceExpand ? ' is-expanded' : '')
-                    toggle.innerHTML = children.length ? '&#9656;' : '&#8226;'
-                    toggle.onclick = (event) => {
-                        event.stopPropagation()
-                        if (!children.length) return
-                        if (this.folderExpandedIds.has(node.id)) this.folderExpandedIds.delete(node.id)
-                        else this.folderExpandedIds.add(node.id)
-                        this.renderFolderOptions(ctx, keyword)
-                    }
-                    row.appendChild(toggle)
-
-                    const label = document.createElement('span')
-                    label.className = 'tmd-batch-folder-node-label'
-                    label.textContent = node.name || '未命名文件夹'
-                    label.title = node.path || node.name || '未命名文件夹'
-                    label.onclick = (event) => {
-                        event.stopPropagation()
-                        if (children.length > 0) {
-                            if (this.folderExpandedIds.has(node.id)) this.folderExpandedIds.delete(node.id)
-                            else this.folderExpandedIds.add(node.id)
-                            this.renderFolderOptions(ctx, keyword)
-                        }
-                    }
-                    row.appendChild(label)
-                    row.onclick = (event) => {
-                        if (event.target.closest && event.target.closest('.tmd-batch-folder-checkbox, .tmd-batch-folder-toggle')) return
-                        if (event.target === row && children.length > 0) {
-                            if (this.folderExpandedIds.has(node.id)) this.folderExpandedIds.delete(node.id)
-                            else this.folderExpandedIds.add(node.id)
-                            this.renderFolderOptions(ctx, keyword)
-                        }
-                    }
-                    parent.appendChild(row)
-
-                    const expanded = children.length > 0 && (this.folderExpandedIds.has(node.id) || forceExpand || !!normalizedKeyword)
-                    if (expanded) {
-                        const group = document.createElement('div')
-                        group.className = 'tmd-batch-folder-children'
-                        children.forEach(child => appendNode(child, depth + 1, group, !!normalizedKeyword))
-                        if (group.childElementCount) parent.appendChild(group)
-                    }
-                    return true
-                }
-                const childHasMatch = (node) => {
-                    if (!normalizedKeyword) return true
-                    if (String(node?.name || '').toLowerCase().includes(normalizedKeyword)) return true
-                    return Array.isArray(node?.children) && node.children.some(childHasMatch)
-                }
-                const root = document.createElement('div')
-                root.className = 'tmd-batch-folder-node' + (currentValue ? '' : ' is-selected')
-                root.style.paddingLeft = '8px'
-                root.innerHTML = '<span class="tmd-batch-folder-toggle">&#8226;</span><span class="tmd-batch-folder-node-label">自动目录 / 根目录</span>'
-                const rootCheckbox = document.createElement('button')
-                rootCheckbox.type = 'button'
-                rootCheckbox.className = 'tmd-batch-folder-checkbox' + (!currentValue ? ' is-checked' : '')
-                rootCheckbox.setAttribute('aria-label', !currentValue ? '当前使用自动目录' : '选择自动目录 / 根目录')
-                rootCheckbox.innerHTML = !currentValue ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.2l3.1 3.1 6.5-6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''
-                rootCheckbox.addEventListener('click', (event) => {
-                    event.preventDefault()
-                   event.stopPropagation()
-                    event.stopImmediatePropagation()
-                   eagle_selected_folder_id = ''
-                   this.folderSelectEl.value = ''
-                   GM_setValue('eagle_selected_folder_id', '')
-                   this.renderFolderOptions(ctx, keyword)
-                   this.syncFolderLabel()
-                }, true)
-                root.appendChild(rootCheckbox)
-                root.onclick = () => {
-                    return
-                }
-                tree.appendChild(root)
-                const rawTree = Array.isArray(ctx.eagle.folderTreeCache) ? ctx.eagle.folderTreeCache : []
-                rawTree.forEach(node => appendNode(node, 0, tree, false))
-            },
-            isPickerOpen: function (kind) {
-                return !!this.panel?.querySelector(`[data-picker="${kind}"]`)?.classList.contains('is-open')
-            },
-            /**
-             * 根据屏幕上下可用空间自动决定弹层方向和高度，保证底部操作区始终留在视口内。
-             */
-            positionPickerMenu: function (picker, desiredHeight) {
-                if (!picker) return
-                const menu = picker.querySelector('.tmd-batch-picker-menu')
-                const trigger = picker.querySelector('.tmd-batch-picker-trigger')
-                if (!menu || !trigger) return
-                const viewportMargin = 16
-                const gap = 8
-                const rect = trigger.getBoundingClientRect()
-                const availableBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportMargin)
-                const availableAbove = Math.max(0, rect.top - gap - viewportMargin)
-                let openAbove = false
-                if (availableBelow >= desiredHeight) openAbove = false
-                else if (availableAbove >= desiredHeight) openAbove = true
-                else openAbove = availableAbove > availableBelow
-                const availableHeight = openAbove ? availableAbove : availableBelow
-                const resolvedHeight = Math.max(96, Math.floor(Math.min(desiredHeight, availableHeight)))
-                menu.style.top = openAbove ? 'auto' : 'calc(100% + ' + gap + 'px)'
-                menu.style.bottom = openAbove ? 'calc(100% + ' + gap + 'px)' : 'auto'
-                menu.style.height = resolvedHeight + 'px'
-                menu.style.maxHeight = resolvedHeight + 'px'
-                menu.style.transformOrigin = openAbove ? 'bottom right' : 'top right'
-                menu.classList.toggle('opens-upward', openAbove)
-            },
-            positionOpenPicker: function () {
-                const picker = this.panel?.querySelector('.tmd-batch-picker.is-open')
-                if (!picker) return
-                this.positionPickerMenu(picker, picker.dataset.picker === 'tags' ? 600 : 540)
-            },
-            togglePicker: function (kind) {
-                if (this.isPickerOpen(kind)) {
-                    this.closePickers()
-                    return
-                }
-                this.closePickers()
-                const picker = this.panel?.querySelector(`[data-picker="${kind}"]`)
-                if (!picker) return
-                picker.classList.add('is-open')
-                this.positionPickerMenu(picker, kind === 'tags' ? 600 : 540)
-                window.requestAnimationFrame(() => this.positionPickerMenu(picker, kind === 'tags' ? 600 : 540))
-                window.setTimeout(() => {
-                    if (picker.classList.contains('is-open')) {
-                        this.positionPickerMenu(picker, kind === 'tags' ? 600 : 540)
-                    }
-                }, 220)
-                const trigger = picker.querySelector('.tmd-batch-picker-trigger')
-                if (trigger) trigger.setAttribute('aria-expanded', 'true')
-                const input = picker.querySelector('input')
-                if (input) { input.focus(); input.select() }
-                if (kind === 'folder') this.renderFolderOptions(this.ctx, '')
-                else {
-                    this.renderTagOptions(this.ctx)
-                    if (this.eagleTags.length === 0 && !this.tagCatalogLoading) this.refreshEagleTags(false)
-                }
-            },
-            closePickers: function () {
-                this.panel?.querySelectorAll('.tmd-batch-picker.is-open').forEach(picker => {
-                    picker.classList.remove('is-open')
-                    picker.querySelector('.tmd-batch-picker-trigger')?.setAttribute('aria-expanded', 'false')
-                })
-                this.tagSearchKeyword = ''
-                if (this.tagSearchEl) this.tagSearchEl.value = ''
-                if (this.folderSearchEl) this.folderSearchEl.value = ''
-                if (this.ctx) this.renderFolderOptions(this.ctx, '')
-                this.renderTagOptions(this.ctx)
-            },
-            syncFolderLabel: function () {
-                const label = this.panel?.querySelector('[data-action="folder-label"]')
-                const meta = this.panel?.querySelector('[data-picker="folder"] .tmd-batch-picker-meta')
-                if (!label || !meta) return
-                if (!eagle_selected_folder_id) {
-                    label.textContent = '自动目录 / 根目录'
-                    meta.textContent = '选择'
-                    return
-                }
-                const folder = (this.folderList || []).find(item => String(item.id) === String(eagle_selected_folder_id))
-                label.textContent = folder?.path || folder?.name || '已选文件夹'
-                meta.textContent = '已选择'
-            },
-            getTagSuggestions: function () {
-                return (this.eagleTags || []).map(item => String(item.name || '').trim()).filter(Boolean)
-            },
             refreshEagleTags: async function (force = false) {
                 if (this.tagCatalogLoading) return
                 this.tagCatalogLoading = true
-                this.tagCatalogError = ''
-                this.renderTagOptions(this.ctx || TMD)
+                if (this.tagPicker) this.tagPicker.setLoading(true)
                 try {
                     const catalog = await (this.ctx?.eagle || TMD.eagle).getTagCatalog(force)
                     this.eagleTags = Array.isArray(catalog?.tags) ? catalog.tags.filter(item => item && item.name) : []
                     this.eagleTagGroups = Array.isArray(catalog?.groups) ? catalog.groups.filter(item => item && item.id) : []
+                    this.tagPicker.setTags(this.eagleTags)
+                    this.tagPicker.setGroups(this.eagleTagGroups)
                 } catch (err) {
                     this.eagleTags = []
                     this.eagleTagGroups = []
-                    this.tagCatalogError = '无法读取 Eagle 标签，请确认 Eagle 正在运行'
+                    this.tagPicker.setError('无法读取 Eagle 标签，请确认 Eagle 正在运行')
                     console.debug('[TMD][Eagle][tag-list]', err)
                 } finally {
                     this.tagCatalogLoading = false
-                    this.renderTagOptions(this.ctx || TMD)
                 }
             },
-            syncTagLabel: function () {
-                const label = this.panel?.querySelector('[data-action="tags-label"]')
-                const meta = this.panel?.querySelector('[data-action="tags-meta"]')
-                if (!label || !meta) return
-                const tags = Array.isArray(this.selectedTags) ? this.selectedTags : []
-                label.textContent = tags.length > 0 ? tags.slice(0, 2).join('、') + (tags.length > 2 ? '…' : '') : '未选择标签'
-                meta.textContent = tags.length > 0 ? `${tags.length} 个已选` : '添加标签'
-            },
-            toggleTag: function (tag, forceAdd = false) {
-                const clean = String(tag || '').trim()
-                if (!clean) return
-                const exists = this.selectedTags.includes(clean)
-                if (exists && !forceAdd) this.selectedTags = this.selectedTags.filter(item => item !== clean)
-                else if (!exists) this.selectedTags = Array.from(new Set([...this.selectedTags, clean]))
-                this.recentTags = Array.from(new Set([clean, ...(this.recentTags || [])])).slice(0, 24)
-                eagle_selected_tags = [...this.selectedTags]
-                eagle_recent_tags = [...this.recentTags]
-                GM_setValue('eagle_selected_tags', eagle_selected_tags)
-                GM_setValue('eagle_recent_tags', eagle_recent_tags)
-                this.renderTagOptions(window.__TMD_DEBUG__ || TMD)
-                this.syncTagLabel()
-            },
-            renderTagOptions: function (ctx) {
-                return this.renderEagleTagOptions(ctx)
-            },
-            renderEagleTagOptions: function (ctx) {
-                const list = this.tagListEl
-                const recent = this.tagRecentEl
-                if (!list || !recent) return
-                const keyword = String(this.tagSearchKeyword || '').trim().toLowerCase()
-                const selected = new Set(this.selectedTags || [])
-                const entries = (this.eagleTags || []).map(item => ({
-                    name: String(item.name || '').trim(),
-                    count: Number.isFinite(Number(item.imageCount)) ? Number(item.imageCount) : null,
-                })).filter(item => item.name)
-                const byName = new Map(entries.map(item => [item.name, item]))
 
-                recent.innerHTML = ''
-                const recentItems = (this.recentTags || []).filter(tag => byName.has(tag) && (!keyword || tag.toLowerCase().includes(keyword))).slice(0, 8)
-                recent.classList.toggle('has-items', recentItems.length > 0)
-                recentItems.forEach(tag => {
-                    const chip = document.createElement('button')
-                    chip.type = 'button'
-                    chip.className = 'tmd-batch-recent-chip'
-                    chip.textContent = tag
-                    chip.title = '快速选择：' + tag
-                    chip.onclick = () => this.toggleTag(tag, true)
-                    recent.appendChild(chip)
-                })
-
-                list.innerHTML = ''
-                if (this.tagCatalogLoading) {
-                    list.innerHTML = '<div class="tmd-batch-tag-empty">正在读取 Eagle 标签...</div>'
-                    return
-                }
-                if (this.tagCatalogError) {
-                    list.innerHTML = '<div class="tmd-batch-tag-empty">' + this.tagCatalogError + '</div>'
-                    return
-                }
-
-                const renderOption = (entry, parent) => {
-                    if (keyword && !entry.name.toLowerCase().includes(keyword)) return
-                    const option = document.createElement('button')
-                    option.type = 'button'
-                    option.className = 'tmd-batch-tag-option' + (selected.has(entry.name) ? ' is-selected' : '')
-                    option.setAttribute('role', 'option')
-                    option.setAttribute('aria-selected', selected.has(entry.name) ? 'true' : 'false')
-                    option.innerHTML = '<span class="tmd-batch-tag-check">' + (selected.has(entry.name) ? '✓' : '') + '</span><span class="tmd-batch-tag-label"></span><span class="tmd-batch-tag-count"></span>'
-                    option.querySelector('.tmd-batch-tag-label').textContent = entry.name
-                    option.querySelector('.tmd-batch-tag-count').textContent = entry.count === null ? '' : String(entry.count)
-                    option.onclick = () => this.toggleTag(entry.name)
-                    parent.appendChild(option)
-                }
-
-                const renderGroup = (id, title, groupEntries) => {
-                    const visibleEntries = groupEntries.filter(entry => !keyword || entry.name.toLowerCase().includes(keyword))
-                    if (visibleEntries.length === 0) return false
-                    const section = document.createElement('section')
-                    section.className = 'tmd-batch-tag-group'
-                    const collapsed = this.tagGroupsCollapsed.has(id)
-                    const header = document.createElement('button')
-                    header.type = 'button'
-                    header.className = 'tmd-batch-tag-group-title' + (collapsed ? ' collapsed' : '')
-                    header.innerHTML = '<span>' + title + ' <span class="tmd-batch-tag-group-title-meta">(' + visibleEntries.length + ')</span></span><span class="tmd-batch-tag-group-title-chevron">⌄</span>'
-                    header.onclick = () => {
-                        if (this.tagGroupsCollapsed.has(id)) this.tagGroupsCollapsed.delete(id)
-                        else this.tagGroupsCollapsed.add(id)
-                        this.renderTagOptions(ctx)
-                    }
-                    section.appendChild(header)
-                    if (!collapsed) {
-                        const items = document.createElement('div')
-                        items.className = 'tmd-batch-tag-group-items'
-                        if (visibleEntries.length < 2) items.classList.add('single-column')
-                        visibleEntries.forEach(entry => renderOption(entry, items))
-                        section.appendChild(items)
-                    }
-                    list.appendChild(section)
-                    return true
-                }
-
-                const groupedNames = new Set()
-                let hasVisibleGroup = false
-                ;(this.eagleTagGroups || []).forEach(group => {
-                    const groupEntries = (Array.isArray(group.tags) ? group.tags : [])
-                        .map(name => byName.get(String(name || '').trim()))
-                        .filter(Boolean)
-                    groupEntries.forEach(entry => groupedNames.add(entry.name))
-                    if (renderGroup(String(group.id), String(group.name || '未命名分组'), groupEntries)) hasVisibleGroup = true
-                })
-                const ungrouped = entries.filter(entry => !groupedNames.has(entry.name))
-                if (renderGroup('__ungrouped__', '未分组', ungrouped)) hasVisibleGroup = true
-                if (!hasVisibleGroup) {
-                    list.innerHTML = entries.length === 0 ? '<div class="tmd-batch-tag-empty">Eagle 中没有可用标签</div>' : '<div class="tmd-batch-tag-empty">没有匹配的 Eagle 标签</div>'
-                }
-            },
-            legacyRenderTagOptions: function (ctx) {
-                const list = this.tagListEl
-                const recent = this.tagRecentEl
-                if (!list || !recent) return
-                const keyword = String(this.tagSearchKeyword || '').trim().toLowerCase()
-                const suggestions = this.getTagSuggestions().filter(tag => !keyword || tag.toLowerCase().includes(keyword))
-                list.innerHTML = ''
-                if (suggestions.length === 0) {
-                    list.innerHTML = '<div class="tmd-batch-tag-empty">没有匹配的标签，可在下方手动输入</div>'
-                } else {
-                    suggestions.forEach(tag => {
-                        const option = document.createElement('button')
-                        option.type = 'button'
-                        option.className = `tmd-batch-tag-option${this.selectedTags.includes(tag) ? ' is-selected' : ''}`
-                        option.innerHTML = `<span class="tmd-batch-tag-check">${this.selectedTags.includes(tag) ? '✓' : ''}</span><span class="tmd-batch-tag-label"></span>`
-                        option.querySelector('.tmd-batch-tag-label').textContent = tag
-                        option.onclick = () => this.toggleTag(tag)
-                        list.appendChild(option)
-                    })
-                }
-                const recentItems = (this.recentTags || []).filter(tag => !keyword || tag.toLowerCase().includes(keyword)).slice(0, 6)
-                recent.innerHTML = ''
-                recent.classList.toggle('has-items', recentItems.length > 0)
-                recentItems.forEach(tag => {
-                    const chip = document.createElement('button')
-                    chip.type = 'button'
-                    chip.className = 'tmd-batch-recent-chip'
-                    chip.textContent = tag
-                    chip.onclick = () => this.toggleTag(tag, true)
-                    recent.appendChild(chip)
-                })
-            },
             formatProgress: function (extra = '') {
                 const base = `${lang.batch_progress}: \u63a8\u6587 ${this.successTweets}/${this.processed.size}\uff5c\u5a92\u4f53 ${this.successMedia}\uff5c\u8df3\u8fc7 ${this.skippedMedia}\uff5c\u5931\u8d25 ${this.failedTweets}`
                 return extra ? `${base}\uff5c${extra}` : base
@@ -4396,95 +3948,7 @@ const TMD = (function () {
 .tmd-down-eagle svg {color: #22c55e;}
 .tmd-down-eagle:hover svg {color: #16a34a;}
 .tmd-down-eagle.completed svg {color: #22c55e;}
-.tmd-batch-launcher {position: fixed; top: 18px; right: 18px; z-index: 100000; width: 46px; height: 46px; display: grid; place-items: center; padding: 0; border: 1px solid rgba(255,255,255,0.14); border-radius: 50%; background: rgba(29,32,40,0.78); color: #f6f8fb; box-shadow: 0 12px 26px rgba(10,14,22,0.28), inset 0 1px 0 rgba(255,255,255,0.08); cursor: pointer; transition: transform 180ms ease, background 180ms ease, box-shadow 180ms ease;}
-.tmd-batch-launcher svg {width: 26px; height: 26px; display: block;}
-.tmd-batch-launcher:hover {transform: translateY(-2px) scale(1.035); background: rgba(35,38,47,0.88); box-shadow: 0 18px 30px rgba(10,14,22,0.34), inset 0 1px 0 rgba(255,255,255,0.10);}
-.tmd-batch-launcher.is-open {background: rgba(38,42,52,0.92); border-color: rgba(255,255,255,0.22);}
-.tmd-batch-panel {position: fixed; top: 76px; right: 18px; z-index: 99999; width: 296px; box-sizing: border-box; padding: 12px 14px 14px; border-radius: 14px; background: rgba(26,28,34,0.68); color: #edf1f7; backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 16px 44px rgba(4,10,20,0.26), inset 0 1px 0 rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-8px) scale(0.98); transform-origin: top right; transition: transform 180ms ease, opacity 180ms ease, visibility 180ms ease, box-shadow 220ms ease;}
-.tmd-batch-panel::before {content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0) 42%), radial-gradient(circle at top right, rgba(255,255,255,0.10), transparent 46%); opacity: 0.72;}
-.tmd-batch-panel.is-open {opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1);}
-.tmd-batch-panel:hover {box-shadow: 0 18px 46px rgba(4,10,20,0.30), inset 0 1px 0 rgba(255,255,255,0.09);}
-.tmd-batch-panel.running {box-shadow: 0 18px 46px rgba(4,10,20,0.32), inset 0 1px 0 rgba(255,255,255,0.09);}
-.tmd-batch-title {font-size: 14px; font-weight: 600; letter-spacing: 0.1px; margin-bottom: 6px;}
-.tmd-batch-status, .tmd-batch-progress {font-size: 11px; line-height: 1.45; color: rgba(235,240,248,0.72);}
-.tmd-batch-progress {margin-top: 2px; min-height: 18px;}
-.tmd-batch-folder {margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);}
-.tmd-batch-folder-label {font-size: 11px; color: rgba(235,240,248,0.62); margin-bottom: 6px;}
-.tmd-batch-folder-search, .tmd-batch-folder-select {width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; background: rgba(255,255,255,0.06); color: #edf1f7; padding: 8px 10px; font-size: 12px; outline: none; transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;}
-.tmd-batch-folder-search::placeholder {color: rgba(235,240,248,0.40);}
-.tmd-batch-folder-search:focus {border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.08); box-shadow: 0 0 0 3px rgba(255,255,255,0.05);}
-.tmd-batch-folder-select {display: none;}
-.tmd-batch-folder-tree {margin-top: 6px; max-height: 180px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; padding: 4px 0; background: rgba(20,23,30,0.34);}
-.tmd-batch-folder-tree::-webkit-scrollbar {width: 8px;}
-.tmd-batch-folder-tree::-webkit-scrollbar-thumb {background: rgba(255,255,255,0.16); border-radius: 999px;}
-.tmd-batch-folder-node {display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; box-sizing: border-box; border: 0; border-radius: 7px; padding-top: 4px; padding-bottom: 4px; padding-right: 8px; background: transparent; color: rgba(237,241,247,0.88); text-align: left; font-size: 12px; line-height: 1.35; cursor: default; transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;}
-.tmd-batch-folder-node:hover {background: rgba(255,255,255,0.08); color: rgba(248,250,253,0.98);}
-.tmd-batch-folder-node:active {transform: scale(0.992);}
-.tmd-batch-folder-node.is-selected {background: rgba(255,255,255,0.10); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);}
-.tmd-batch-folder-toggle {display: inline-flex; align-items: center; justify-content: center; width: 28px; min-width: 28px; height: 28px; margin-left: auto; border-radius: 6px; color: rgba(255,255,255,0.52); font-size: 10px; transition: transform 160ms ease, color 160ms ease; order: 4;}
-.tmd-batch-folder-toggle:hover {background: rgba(255,255,255,0.08); color: rgba(248,250,253,0.92);}
-.tmd-batch-folder-toggle.is-expanded {transform: rotate(90deg); color: rgba(255,255,255,0.88);}
-.tmd-batch-folder-node-label {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; order: 3;}
-.tmd-batch-folder-checkbox {width: 18px; height: 18px; flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid rgba(235,240,248,0.42); border-radius: 4px; background: transparent; color: rgba(248,250,253,0.96); cursor: pointer; order: 1;}
-.tmd-batch-folder-checkbox:hover, .tmd-batch-folder-checkbox.is-checked {border-color: rgba(177,215,248,0.84); background: rgba(177,215,248,0.22);}
-.tmd-batch-folder-checkbox svg {width: 14px; height: 14px;}
-.tmd-batch-folder-icon {width: 18px; height: 18px; flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; color: rgba(237,241,247,0.62); order: 2;}
-.tmd-batch-folder-icon svg {width: 18px; height: 18px;}
-.tmd-batch-folder-children {display: flex; flex-direction: column;}
-.tmd-batch-folder-select option {background: #14171e; color: #f8fafc;}
-.tmd-batch-folder-refresh {margin-top: 6px; border: 0; background: transparent; color: rgba(235,240,248,0.54); font-size: 11px; cursor: pointer; padding: 0; transition: color 160ms ease;}
-.tmd-batch-folder-refresh:hover {color: #fff; text-decoration: underline;}
-.tmd-batch-picker {position: relative;}
-.tmd-batch-picker.is-open {z-index: 20;}
-.tmd-batch-picker-trigger {width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; background: rgba(255,255,255,0.06); color: rgba(237,241,247,0.92); font-size: 12px; text-align: left; cursor: pointer; box-sizing: border-box; transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;}
-.tmd-batch-picker-trigger:hover, .tmd-batch-picker.is-open .tmd-batch-picker-trigger {border-color: rgba(255,255,255,0.20); background: rgba(255,255,255,0.09);}
-.tmd-batch-picker-trigger > span:first-child {flex: 1 1 auto; min-width: 0; display: block; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-.tmd-batch-recent-chip {min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-.tmd-batch-picker-meta {flex: 0 0 auto; color: rgba(235,240,248,0.48); font-size: 10px; white-space: nowrap;}
-.tmd-batch-picker-menu {position: absolute; top: calc(100% + 8px); left: auto; right: 0; z-index: 21; display: none; flex-direction: column; width: min(420px, calc(100vw - 20px)); height: min(540px, calc(100vh - 32px)); box-sizing: border-box; padding: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; background: rgba(20,23,30,0.98); box-shadow: 0 18px 40px rgba(5,10,18,0.34), inset 0 1px 0 rgba(255,255,255,0.06); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);}
-.tmd-batch-picker.is-open .tmd-batch-picker-menu {display: flex; animation: tmdPickerIn 160ms cubic-bezier(0.16,1,0.3,1);}
-.tmd-batch-tags-menu {width: min(420px, calc(100vw - 20px)); height: min(600px, calc(100vh - 24px)); padding: 7px;}
-.tmd-batch-picker-head {display: flex; align-items: center; gap: 8px; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); color: rgba(235,240,248,0.46); font-size: 10px; white-space: nowrap;}
-.tmd-batch-picker-refresh {flex: 0 0 auto; padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; color: rgba(235,240,248,0.48); font-size: 10px; cursor: pointer;}
-.tmd-batch-picker-refresh:hover {color: rgba(248,250,253,0.92); background: rgba(255,255,255,0.08);}
-.tmd-batch-folder-search, .tmd-batch-tag-search {flex: 1; min-width: 0; height: 36px; padding: 0 12px; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; background: rgba(255,255,255,0.06); color: rgba(244,247,251,0.96); font-size: 12px; outline: none; box-sizing: border-box;}
-.tmd-batch-folder-search:focus, .tmd-batch-tag-search:focus {border-color: rgba(255,255,255,0.20); background: rgba(255,255,255,0.08);}
-.tmd-batch-folder-search::placeholder, .tmd-batch-tag-search::placeholder {color: rgba(235,240,248,0.40);}
-.tmd-batch-folder-recent, .tmd-batch-tag-recent {display: none; gap: 6px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none;}
-.tmd-batch-folder-recent.has-items, .tmd-batch-tag-recent.has-items {display: flex;}
-.tmd-batch-folder-recent::-webkit-scrollbar, .tmd-batch-tag-recent::-webkit-scrollbar {display: none;}
-.tmd-batch-recent-chip {flex: 0 0 auto; max-width: 180px; padding: 5px 8px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: rgba(255,255,255,0.05); color: rgba(237,241,247,0.78); font-size: 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-.tmd-batch-recent-chip:hover {background: rgba(255,255,255,0.10); color: #fff;}
-.tmd-batch-picker-footer {display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); color: rgba(235,240,248,0.42); font-size: 10px; flex: 0 0 auto; min-height: 26px; align-items: center;}
-.tmd-batch-folder-tree {flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; scrollbar-width: thin; padding: 2px 2px 8px 0;}
-.tmd-batch-tag-list {display: flex; flex-direction: column; gap: 0; flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; scrollbar-width: thin; padding: 1px 2px 4px 0;}
-.tmd-batch-tag-option {width: 100%; min-height: 26px; display: flex; align-items: center; gap: 5px; padding: 3px 5px; border: 0; border-radius: 6px; background: transparent; color: rgba(237,241,247,0.84); font-size: 11px; text-align: left; cursor: pointer;}
-.tmd-batch-tag-option:hover {background: rgba(255,255,255,0.08); color: #fff;}
-.tmd-batch-tag-option.is-selected {background: rgba(255,255,255,0.10); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);}
-.tmd-batch-tag-check {width: 10px; flex: 0 0 10px; color: rgba(248,250,253,0.90); font-size: 10px; text-align: center;}
-.tmd-batch-tag-label {flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-.tmd-batch-tag-empty {padding: 12px 8px; color: rgba(235,240,248,0.48); font-size: 11px; text-align: center;}
-.tmd-batch-tag-group {margin: 0 0 4px;}
-.tmd-batch-tag-group-title {width: 100%; min-height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 3px; border: 0; border-bottom: 1px solid rgba(255,255,255,0.08); background: transparent; color: rgba(248,250,253,0.78); font-size: 11px; font-weight: 600; text-align: left; cursor: pointer;}
-.tmd-batch-tag-group-title-meta {color: rgba(235,240,248,0.46); font-size: 10px; font-weight: 400;}
-.tmd-batch-tag-group-title-chevron {transition: transform 160ms ease;}
-.tmd-batch-tag-group-title.collapsed .tmd-batch-tag-group-title-chevron {transform: rotate(-90deg);}
-.tmd-batch-tag-group-items {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 4px; padding-top: 2px;}
-.tmd-batch-tag-group-items.single-column {grid-template-columns: minmax(0, 1fr);}
-.tmd-batch-tag-option {min-height: 26px; padding: 3px 5px;}
-.tmd-batch-tag-count {margin-left: 3px; color: rgba(235,240,248,0.46); font-size: 9px;}
-.tmd-batch-tag-manual {width: 100%; height: 30px; margin-top: 4px; padding: 0 7px; border: 1px solid rgba(255,255,255,0.10); border-radius: 7px; background: rgba(255,255,255,0.05); color: #edf1f7; font-size: 11px; outline: none; box-sizing: border-box;}
-.tmd-batch-tag-recent.has-items {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 4px; padding: 1px 0 4px; overflow: visible;}
-.tmd-batch-tag-recent .tmd-batch-recent-chip {width: 100%; max-width: none; min-height: 26px; padding: 3px 5px; border-color: transparent; border-radius: 6px; background: transparent; font-size: 11px; text-align: left;}
 @keyframes tmdPickerIn {from {opacity: 0; transform: translateY(-4px) scale(0.985);} to {opacity: 1; transform: translateY(0) scale(1);}}
-.tmd-batch-actions {display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;}
-.tmd-batch-btn {appearance: none; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.06); color: #f5f7fb; border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 500; cursor: pointer; transition: transform 140ms ease, background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;}
-.tmd-batch-btn:hover {background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.18); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(10,14,22,0.16);}
-.tmd-batch-btn:active {transform: translateY(1px) scale(0.98);}
-.tmd-batch-btn:disabled {opacity: 0.45; cursor: not-allowed; transform: none;}
-.tmd-batch-btn.primary {background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.20); box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);}
-.tmd-batch-btn.primary:hover {background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.28);}
-.tmd-batch-btn.ghost {background: transparent;}
 .tmd-notifier {display: none; position: fixed; left: 16px; bottom: 16px; color: #000; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 4px;}
 .tmd-notifier.running {display: flex; align-items: center;}
 .tmd-notifier label {display: inline-flex; align-items: center; margin: 0 8px;}

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页图片批量保存到Eagle
 // @namespace    eagle-web-collector
-// @version      1.1.11
+// @version      1.1.12
 // @description  在 Fab.com、E-Hentai 等页面批量采集图片，可保存到 Eagle 或本地下载
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -10,6 +10,7 @@
 // @match        *://exhentai.org/*
 // @match        *://www.fab.com/*
 // @match        *://fab.com/*
+// // @require      https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_getValue
@@ -2856,6 +2857,12 @@
             this.container.id = 'eagle-scraper-panel';
             this._createStyles();
             this._buildPanel();
+
+            // 家族共享库版本徽标:确认当前生效的 eagle-ui 版本
+            try {
+                const badge = EagleUI.versionBadge();
+                this.container.querySelector('.esp-header-title')?.appendChild(badge);
+            } catch (err) { /* 徽标失败不影响面板 */ }
             document.body.appendChild(this.container);
 
             // 初始化时折叠

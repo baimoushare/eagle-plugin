@@ -40,7 +40,7 @@
     }
 
     /** 库版本号（排查"用户用的是哪版 UI"的依据） */
-    const VERSION = '1.1.0';
+    const VERSION = '1.2.0';
 
     /**
      * 设计令牌 + 组件样式（单一 CSS 文本，注入一次）。
@@ -133,6 +133,10 @@
     visibility: visible;
     pointer-events: auto;
     transform: translateY(0) scale(1);
+}
+/* 采集中状态(脚本添加 running 类):阴影加深,提示任务进行中 */
+.egc-panel.running {
+    box-shadow: 0 18px 46px rgba(4, 10, 20, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.09);
 }
 
 /* ── 标题 / 状态 / 进度文本 / 版本徽标 ── */
@@ -333,6 +337,40 @@
     font-size: 10px;
     white-space: nowrap;
 }
+/* 弹层头部"刷新"按钮（folderPicker/tagPicker 传入回调时显示） */
+.egc-menu-refresh {
+    flex: 0 0 auto;
+    padding: 3px 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: rgba(235, 240, 248, 0.48);
+    font-size: 10px;
+    cursor: pointer;
+}
+.egc-menu-refresh:hover { color: rgba(248, 250, 253, 0.92); background: rgba(255, 255, 255, 0.08); }
+/* 标签分组（setGroups 启用）：分组标题可折叠，组内两列 */
+.egc-tag-group { margin: 0 0 4px; }
+.egc-tag-group-title {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 26px;
+    padding: 3px;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: transparent;
+    color: rgba(248, 250, 253, 0.78);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.egc-tag-group-title:hover { color: #fff; }
+.egc-tag-group-title-meta { color: rgba(235, 240, 248, 0.46); font-size: 10px; font-weight: 400; }
+.egc-tag-group-title-chevron { transition: transform 160ms ease; }
+.egc-tag-group-title.collapsed .egc-tag-group-title-chevron { transform: rotate(-90deg); }
 /* 最近使用 chip 行（文件夹菜单顶部 / 标签菜单内均用） */
 .egc-menu-recent {
     flex: 0 0 auto;
@@ -630,6 +668,7 @@
     gap: 0 4px;
     padding-top: 2px;
 }
+.egc-tag-items.single-column { grid-template-columns: minmax(0, 1fr); }
 .egc-tag-option {
     width: 100%;
     min-height: 26px;
@@ -811,8 +850,18 @@
         search.type = 'text';
         search.className = 'egc-menu-search';
         search.placeholder = o.searchPlaceholder || '搜索文件夹...';
-        const mode = el('span', 'egc-picker-mode', multiple ? '选择目标' : '选择目标');
+        const mode = el('span', 'egc-picker-mode', '选择目标');
         head.append(search, mode);
+        // 提供刷新回调时（如 X 版"刷新目录"），在弹层头部出现刷新按钮
+        if (typeof o.onRefresh === 'function') {
+            const refreshBtn = el('button', 'egc-menu-refresh', '刷新目录');
+            refreshBtn.type = 'button';
+            refreshBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                o.onRefresh();
+            });
+            head.appendChild(refreshBtn);
+        }
         const recent = el('div', 'egc-menu-recent');
         const tree = el('div', 'egc-menu-tree');
         tree.setAttribute('role', 'tree');
@@ -823,6 +872,12 @@
         footer.append(footerHint, doneBtn);
         menu.append(head, recent, tree, footer);
         document.body.appendChild(menu);
+
+        /* —— 根目录项文案：支持字符串或函数（动态文案，如 X 版"自动目录：根/子模板"） —— */
+        const rootLabelText = () => {
+            const raw = typeof o.rootLabel === 'function' ? o.rootLabel() : o.rootLabel;
+            return String(raw || '').trim() || '默认（根目录）';
+        };
 
         /* —— 工具：扁平化查找 —— */
         const walkFolders = (nodes, fn, depth) => {
@@ -853,9 +908,9 @@
         function syncTriggerLabel() {
             const names = state.selected.map(id => findNameById(id)).filter(Boolean);
             let text;
-            if (state.selected.length === 0) text = o.rootLabel || '默认（根目录）';
-            else if (multiple) text = names.length > 1 ? `${names.length} 个文件夹` : (names[0] || o.rootLabel || '默认（根目录）');
-            else text = names[0] || o.rootLabel || '默认（根目录）';
+            if (state.selected.length === 0) text = rootLabelText();
+            else if (multiple) text = names.length > 1 ? `${names.length} 个文件夹` : (names[0] || rootLabelText());
+            else text = names[0] || rootLabelText();
             triggerText.textContent = text;
             triggerText.title = names.join('、') || text;
         }
@@ -893,7 +948,7 @@
                 toggleSelection('');
             });
             const rootIcon = el('span', 'egc-folder-option-icon', FOLDER_SVG);
-            const rootLabel = el('span', 'egc-folder-option-label', o.rootLabel || '默认（根目录）');
+            const rootLabel = el('span', 'egc-folder-option-label', rootLabelText());
             rootItem.append(rootCheck, rootIcon, rootLabel);
             tree.appendChild(rootItem);
 
@@ -1074,6 +1129,8 @@
         const menuHeight = o.menuHeight || 600;
         const state = {
             tags: [],          // [{name, count|null}]
+            groups: [],        // [{id, name, tags: [标签名...]}]，Eagle 标签分组（可选）
+            collapsedGroups: new Set(), // 记住用户折叠了哪些分组
             selected: [],
             recent: (Array.isArray(o.recent) ? o.recent : []).map(String).filter(Boolean),
             keyword: '',
@@ -1100,6 +1157,16 @@
         search.placeholder = '搜索标签...';
         const mode = el('span', 'egc-picker-mode', '可多选');
         head.append(search, mode);
+        // 提供刷新回调时（如 X 版"刷新标签"），在弹层头部出现刷新按钮
+        if (typeof o.onRefresh === 'function') {
+            const refreshBtn = el('button', 'egc-menu-refresh', '刷新标签');
+            refreshBtn.type = 'button';
+            refreshBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                o.onRefresh();
+            });
+            head.appendChild(refreshBtn);
+        }
         const selectedBox = el('div', 'egc-selected-tags');
         const recentBox = el('div', 'egc-menu-recent egc-tag-recent');
         const list = el('div', 'egc-tag-list');
@@ -1178,7 +1245,7 @@
                 recentBox.appendChild(chip);
             });
 
-            // 全量列表（两列网格）
+            // 全量列表（两列网格；灌入过分组时按分组分区渲染，标题可折叠）
             list.innerHTML = '';
             if (state.loading) {
                 list.appendChild(el('div', 'egc-tag-empty', '正在读取 Eagle 标签...'));
@@ -1188,11 +1255,9 @@
                 list.appendChild(el('div', 'egc-tag-empty', state.error));
                 return;
             }
-            const items = el('div', 'egc-tag-items');
-            let visibleCount = 0;
-            state.tags.forEach(entry => {
-                if (keyword && !entry.name.toLowerCase().includes(keyword)) return;
-                visibleCount++;
+
+            // 单个标签行：勾选切换 + 数量展示
+            const buildOption = (entry) => {
                 const selected = state.selected.includes(entry.name);
                 const option = el('button', 'egc-tag-option' + (selected ? ' active' : ''));
                 option.type = 'button';
@@ -1205,10 +1270,61 @@
                     touchRecent(entry.name);
                     setSelected(selected ? state.selected.filter(v => v !== entry.name) : [...state.selected, entry.name]);
                 });
-                items.appendChild(option);
-            });
-            if (visibleCount > 0) list.appendChild(items);
-            else list.appendChild(el('div', 'egc-tag-empty', state.tags.length === 0 ? 'Eagle 中没有可用标签' : '没有匹配的 Eagle 标签'));
+                return option;
+            };
+            // 分组区：标题行（可折叠）+ 组内两列；单个条目时退化为单列
+            const buildGroup = (groupId, title, entries) => {
+                const visibleEntries = entries.filter(entry => !keyword || entry.name.toLowerCase().includes(keyword));
+                if (visibleEntries.length === 0) return false;
+                const section = el('section', 'egc-tag-group');
+                const collapsed = state.collapsedGroups.has(groupId);
+                const header = el('button', 'egc-tag-group-title' + (collapsed ? ' collapsed' : ''));
+                header.type = 'button';
+                header.innerHTML = '<span>' + title + ' <span class="egc-tag-group-title-meta">(' + visibleEntries.length + ')</span></span><span class="egc-tag-group-title-chevron">⌄</span>';
+                header.addEventListener('click', () => {
+                    if (state.collapsedGroups.has(groupId)) state.collapsedGroups.delete(groupId);
+                    else state.collapsedGroups.add(groupId);
+                    renderMenu();
+                });
+                section.appendChild(header);
+                if (!collapsed) {
+                    const items = el('div', 'egc-tag-items' + (visibleEntries.length < 2 ? ' single-column' : ''));
+                    visibleEntries.forEach(entry => items.appendChild(buildOption(entry)));
+                    section.appendChild(items);
+                }
+                list.appendChild(section);
+                return true;
+            };
+
+            if (state.groups.length > 0) {
+                // 分组渲染：先各分组，再"未分组"兜底（与 Eagle 官方弹层一致）
+                const byName = new Map(state.tags.map(t => [t.name, t]));
+                const groupedNames = new Set();
+                let hasVisibleGroup = false;
+                state.groups.forEach(group => {
+                    const entries = (Array.isArray(group.tags) ? group.tags : [])
+                        .map(name => byName.get(String(name || '').trim()))
+                        .filter(Boolean);
+                    entries.forEach(entry => groupedNames.add(entry.name));
+                    if (buildGroup(String(group.id), String(group.name || '未命名分组'), entries)) hasVisibleGroup = true;
+                });
+                const ungrouped = state.tags.filter(entry => !groupedNames.has(entry.name));
+                if (buildGroup('__ungrouped__', '未分组', ungrouped)) hasVisibleGroup = true;
+                if (!hasVisibleGroup) {
+                    list.appendChild(el('div', 'egc-tag-empty', state.tags.length === 0 ? 'Eagle 中没有可用标签' : '没有匹配的 Eagle 标签'));
+                }
+            } else {
+                // 无分组：平铺两列
+                const items = el('div', 'egc-tag-items');
+                let visibleCount = 0;
+                state.tags.forEach(entry => {
+                    if (keyword && !entry.name.toLowerCase().includes(keyword)) return;
+                    visibleCount++;
+                    items.appendChild(buildOption(entry));
+                });
+                if (visibleCount > 0) list.appendChild(items);
+                else list.appendChild(el('div', 'egc-tag-empty', state.tags.length === 0 ? 'Eagle 中没有可用标签' : '没有匹配的 Eagle 标签'));
+            }
         }
 
         // 手动输入：回车或失焦时按逗号/换行解析合并进已选
@@ -1271,6 +1387,12 @@
             setLoading(loading) { state.loading = !!loading; renderMenu(); },
             setError(message) { state.error = String(message || ''); state.loading = false; renderMenu(); },
             setRecent(tags) { state.recent = normalize(tags).slice(0, MAX_RECENT); renderMenu(); },
+            /** 灌入 Eagle 标签分组 groups: [{id, name, tags: [标签名...]}]，传入后列表按分组渲染 */
+            setGroups(groups) {
+                state.groups = (Array.isArray(groups) ? groups : [])
+                    .map(g => ({ id: String(g.id), name: String(g.name || '未命名分组'), tags: Array.isArray(g.tags) ? g.tags.map(String) : [] }));
+                renderMenu();
+            },
             getSelected() { return state.selected.slice(); },
             setSelected(tags, silent) { setSelected(tags, silent); },
             open, close,

@@ -105,6 +105,11 @@
         { name: '教程', count: 7 },
         { name: '三维', count: 3 },
     ]);
+    // 分组演示(X 脚本场景):灌入分组后列表按"分组/未分组"分区渲染
+    tagPicker.setGroups([
+        { id: 'g1', name: '素材库', tags: ['参考图', 'photo'] },
+        { id: 'g2', name: '学习', tags: ['教程', '三维'] },
+    ]);
     tagPicker.setSelected(['参考图'], true);
 </script>
 </body>
