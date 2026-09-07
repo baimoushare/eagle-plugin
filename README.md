@@ -9,6 +9,7 @@
 | `eagle-fab-collector.user.js` | 1.0.0 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
 | `eagle-web-collector.user.js` | 1.1.11 | Fab.com、E-Hentai、ExHentai | 综合版,批量采集页面图片,自动匹配站点目录与标签 |
 | `eagle-x-collector.user.js` | 1.1.13 | X(Twitter) | 一键下载推文图片/视频/音频,批量采集时间线与"喜欢",三层去重(本地索引 + Eagle 查重 + URL 兜底) |
+| `eagle-douyin-collector.user.js` | 0.1.0 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
 
 所有脚本均支持两种保存方式:存入 Eagle / 本地 zip 打包下载。
 
