@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.2.1
+// @version      0.3.0
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
 // @supportURL   mailto:www.774466655@qq.com
 // @match        *://www.douyin.com/*
 // @match        *://douyin.com/*
+// @require      https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_getValue
@@ -1148,49 +1149,56 @@
             init: function () {
                 if (this.panel) return
                 this.recentTags = Array.isArray(GM_getValue('edd_recent_tags', [])) ? GM_getValue('edd_recent_tags', []) : []
-                const launcher = document.createElement('button')
-                launcher.type = 'button'
-                launcher.className = 'edd-launcher'
-                launcher.title = '抖音采集'
-                launcher.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7M8 15.5h7.5M18.4 6.2v10.1M15.9 13.9l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                // UI 外壳交给家族共享库（eagle-ui.js）：样式、开合动画、设计令牌统一由库维护，
+                // 本脚本只负责面板内容结构与业务行为。
+                const launcherHandle = EagleUI.createLauncher({
+                    title: '抖音采集',
+                    icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7M8 15.5h7.5M18.4 6.2v10.1M15.9 13.9l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                })
+                const launcher = launcherHandle.el
                 document.body.appendChild(launcher)
                 this.launcher = launcher
 
-                const panel = document.createElement('div')
-                panel.className = 'edd-panel'
+                const panelHandle = EagleUI.createPanel({})
+                const panel = panelHandle.el
                 panel.innerHTML = `
-<div class="edd-title">抖音采集</div>
-<div class="edd-status">待命</div>
-<div class="edd-progress"></div>
-<div class="edd-field">
-  <div class="edd-label">Eagle 目标文件夹</div>
-  <select class="edd-select" data-action="folder-select"><option value="">自动目录（抖音/作者）</option></select>
+<div class="egc-title">抖音采集</div>
+<div class="egc-status">待命</div>
+<div class="egc-progress"></div>
+<div class="egc-field">
+  <div class="egc-label">Eagle 目标文件夹</div>
+  <select class="egc-select" data-action="folder-select"><option value="">自动目录（抖音/作者）</option></select>
 </div>
-<div class="edd-field">
-  <div class="edd-label">标签（从 Eagle 点选或输入回车，仅保存到 Eagle）</div>
-  <input class="edd-input" data-action="tags-input" placeholder="搜索/输入标签后按 Enter" />
-  <div class="edd-tags" data-action="tags-view"></div>
-  <div class="edd-tag-catalog" data-action="tags-catalog">标签目录加载中...</div>
+<div class="egc-field">
+  <div class="egc-label">标签（从 Eagle 点选或输入回车，仅保存到 Eagle）</div>
+  <input class="egc-input" data-action="tags-input" placeholder="搜索/输入标签后按 Enter" />
+  <div class="egc-tags" data-action="tags-view"></div>
+  <div class="egc-tag-catalog" data-action="tags-catalog">标签目录加载中...</div>
 </div>
-<div class="edd-field">
-  <div class="edd-label">数量上限（0 = 采集全部）</div>
-  <input class="edd-input" data-action="limit-input" type="number" min="0" step="1" value="0" />
+<div class="egc-field">
+  <div class="egc-label">数量上限（0 = 采集全部）</div>
+  <input class="egc-input" data-action="limit-input" type="number" min="0" step="1" value="0" />
 </div>
-<div class="edd-actions">
-  <button type="button" class="edd-btn primary" data-action="eagle">存入 Eagle</button>
-  <button type="button" class="edd-btn" data-action="download">本地下载</button>
-  <button type="button" class="edd-btn" data-action="current">存当前作品到Eagle</button>
-  <button type="button" class="edd-btn ghost" data-action="stop">停止</button>
+<div class="egc-actions">
+  <button type="button" class="egc-btn primary" data-action="eagle">存入 Eagle</button>
+  <button type="button" class="egc-btn" data-action="download">本地下载</button>
+  <button type="button" class="egc-btn" data-action="current">存当前作品到Eagle</button>
+  <button type="button" class="egc-btn ghost" data-action="stop">停止</button>
 </div>
 `
                 document.body.appendChild(panel)
                 this.panel = panel
+                // 面板每次展开时刷新 Eagle 目录与标签（Eagle 未运行则静默保持占位提示）
                 launcher.onclick = () => {
-                    const open = panel.classList.toggle('is-open')
-                    launcher.classList.toggle('is-open', open)
+                    const open = panelHandle.toggle()
+                    launcherHandle.setOpen(open)
+                    if (open) {
+                        this.refreshFolderOptions()
+                        this.loadTagCatalog()
+                    }
                 }
-                this.statusEl = panel.querySelector('.edd-status')
-                this.progressEl = panel.querySelector('.edd-progress')
+                this.statusEl = panel.querySelector('.egc-status')
+                this.progressEl = panel.querySelector('.egc-progress')
                 this.folderSelectEl = panel.querySelector('[data-action="folder-select"]')
                 this.folderLimitEl = panel.querySelector('[data-action="limit-input"]')
                 this.tagsInputEl = panel.querySelector('[data-action="tags-input"]')
@@ -1218,15 +1226,6 @@
                 this.renderTags()
                 this.restoreFolderSelection()
 
-                // 面板每次展开时刷新 Eagle 目录与标签（Eagle 未运行则静默保持占位提示）
-                launcher.onclick = () => {
-                    const open = panel.classList.toggle('is-open')
-                    launcher.classList.toggle('is-open', open)
-                    if (open) {
-                        this.refreshFolderOptions()
-                        this.loadTagCatalog()
-                    }
-                }
                 // 初始化 1.2s 后也预拉一次，用户第一次展开就能看到可选项
                 setTimeout(() => {
                     this.refreshFolderOptions()
@@ -1240,7 +1239,7 @@
                 for (const tag of this.selectedTags) {
                     const chip = document.createElement('button')
                     chip.type = 'button'
-                    chip.className = 'edd-tag-chip is-selected'
+                    chip.className = 'egc-tag-chip is-selected'
                     chip.textContent = tag + ' ×'
                     chip.onclick = () => {
                         this.selectedTags = this.selectedTags.filter(t => t !== tag)
@@ -1297,7 +1296,7 @@
                 for (const name of filtered) {
                     const chip = document.createElement('button')
                     chip.type = 'button'
-                    chip.className = 'edd-tag-catalog-chip' + (this.selectedTags.includes(name) ? ' is-selected' : '')
+                    chip.className = 'egc-tag-catalog-chip' + (this.selectedTags.includes(name) ? ' is-selected' : '')
                     chip.textContent = name
                     chip.onclick = () => {
                         if (this.selectedTags.includes(name)) {
@@ -1626,51 +1625,14 @@
         },
 
         // ╔════════════════════════════════════════════════════════════╗
-        // ║          8. 样式（与 eagle-x 面板同视觉体系）                 ║
+        // ║   8. 样式 —— 已统一收敛到家族共享库 eagle-ui.js（@require） ║
         // ╚════════════════════════════════════════════════════════════╝
-
-        css: `
-.edd-launcher {position: fixed; top: 18px; right: 18px; z-index: 100000; width: 46px; height: 46px; display: grid; place-items: center; padding: 0; border: 1px solid rgba(255,255,255,0.14); border-radius: 50%; background: rgba(29,32,40,0.78); color: #f6f8fb; box-shadow: 0 12px 26px rgba(10,14,22,0.28), inset 0 1px 0 rgba(255,255,255,0.08); cursor: pointer; transition: transform 180ms ease, background 180ms ease;}
-.edd-launcher svg {width: 26px; height: 26px; display: block;}
-.edd-launcher:hover {transform: translateY(-2px) scale(1.035); background: rgba(35,38,47,0.88);}
-.edd-launcher.is-open {background: rgba(38,42,52,0.92); border-color: rgba(255,255,255,0.22);}
-.edd-panel {position: fixed; top: 76px; right: 18px; z-index: 99999; width: 300px; box-sizing: border-box; padding: 12px 14px 14px; border-radius: 14px; background: rgba(26,28,34,0.72); color: #edf1f7; backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 16px 44px rgba(4,10,20,0.26), inset 0 1px 0 rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-8px) scale(0.98); transform-origin: top right; transition: transform 180ms ease, opacity 180ms ease, visibility 180ms ease;}
-.edd-panel.is-open {opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1);}
-.edd-title {font-size: 14px; font-weight: 600; margin-bottom: 6px;}
-.edd-status, .edd-progress {font-size: 11px; line-height: 1.45; color: rgba(235,240,248,0.72);}
-.edd-progress {margin-top: 2px; min-height: 16px;}
-.edd-field {margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);}
-.edd-label {font-size: 11px; color: rgba(235,240,248,0.62); margin-bottom: 6px;}
-.edd-select, .edd-input {width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; background: rgba(255,255,255,0.06); color: #edf1f7; padding: 8px 10px; font-size: 12px; outline: none; transition: border-color 160ms ease, background 160ms ease;}
-.edd-select:focus, .edd-input:focus {border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.08);}
-.edd-select option {background: #14171e; color: #f8fafc;}
-.edd-tags {display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px;}
-.edd-tag-chip {padding: 3px 8px; border: 1px solid rgba(255,255,255,0.12); border-radius: 7px; background: rgba(255,255,255,0.06); color: rgba(237,241,247,0.88); font-size: 11px; cursor: pointer;}
-.edd-tag-chip:hover {background: rgba(255,255,255,0.12); color: #fff;}
-.edd-tag-chip.is-selected {border-color: rgba(177,215,248,0.7); background: rgba(177,215,248,0.18); color: #fff;}
-.edd-tag-catalog {margin-top: 6px; max-height: 96px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start; font-size: 11px; color: rgba(235,240,248,0.46); scrollbar-width: thin;}
-.edd-tag-catalog::-webkit-scrollbar {width: 6px;}
-.edd-tag-catalog::-webkit-scrollbar-thumb {background: rgba(255,255,255,0.16); border-radius: 999px;}
-.edd-tag-catalog-chip {padding: 2px 7px; border: 1px solid rgba(255,255,255,0.10); border-radius: 6px; background: transparent; color: rgba(237,241,247,0.72); font-size: 11px; cursor: pointer;}
-.edd-tag-catalog-chip:hover {background: rgba(255,255,255,0.10); color: #fff;}
-.edd-tag-catalog-chip.is-selected {border-color: rgba(177,215,248,0.7); background: rgba(177,215,248,0.18); color: #fff;}
-.edd-actions {display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;}
-.edd-btn {appearance: none; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.06); color: #f5f7fb; border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 500; cursor: pointer; transition: transform 140ms ease, background 180ms ease;}
-.edd-btn:hover {background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.18); transform: translateY(-1px);}
-.edd-btn:disabled {opacity: 0.45; cursor: not-allowed; transform: none;}
-.edd-btn.primary {background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.20);}
-.edd-btn.ghost {background: transparent;}
-`,
 
         // ╔════════════════════════════════════════════════════════════╗
         // ║          9. 启动：SPA 路由轮询 + 面板挂载                     ║
         // ╚════════════════════════════════════════════════════════════╝
 
         init: function () {
-            const style = document.createElement('style')
-            style.textContent = this.css
-            document.head.appendChild(style)
-
             // 抖音是 SPA：无刷新路由切换，用轻量轮询同步面板显隐与被动收割。
             // 作者主页显示面板；详情页保留面板（供“采集当前作品”）；其他页面隐藏。
             const syncPanelVisibility = () => {
