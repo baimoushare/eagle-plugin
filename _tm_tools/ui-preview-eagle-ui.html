@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <title>Eagle 家族 UI 预览（eagle-ui.js）</title>
 <!--
-  本地预览页：双击用浏览器打开即可看到 eagle-ui.js 渲染出的家族面板样式。
-  面板内容结构与 eagle-douyin-collector 一致，仅静态演示，不连接 Eagle。
+  本地预览页：起本地服务(python -m http.server 8799)后浏览器打开。
+  面板结构与 eagle-douyin-collector 一致，选择器灌入模拟 Eagle 数据，
+  可完整点验:文件夹树搜索/展开/单选、标签勾选/最近/手输/Esc 关闭。
 -->
 <style>
     body {
@@ -28,13 +29,12 @@
 </head>
 <body>
 <div class="tip">
-    本地静态预览，不连接 Eagle｜当前库版本 <b id="ui-version">未知</b><br>
-    演示内容 = 抖音采集面板结构；改 eagle-ui.js 后刷新本页即可看到效果
+    本地静态预览（模拟 Eagle 数据）｜库版本 <b id="ui-version">未知</b><br>
+    演示内容 = 抖音采集面板结构；可点开两个选择器验证弹层交互
 </div>
 
 <script src="../eagle-ui.js"></script>
 <script>
-    // ── 用共享库搭一个与抖音脚本完全一致的面板 ──
     document.getElementById('ui-version').textContent = window.EagleUI.version;
 
     var launcher = EagleUI.createLauncher({
@@ -45,29 +45,20 @@
 
     var panel = EagleUI.createPanel({});
     panel.el.innerHTML = `
-<div class="egc-title">抖音采集</div>
+<div class="egc-title">抖音采集<span class="egc-version">UI ${EagleUI.version}</span></div>
 <div class="egc-status">正在存入 Eagle</div>
 <div class="egc-progress">已收 24/87｜本轮已处理 18｜新存 36｜已存过跳过 5｜失败 0</div>
 <div class="egc-field">
   <div class="egc-label">Eagle 目标文件夹</div>
-  <select class="egc-select"><option value="">自动目录（抖音/作者）</option><option selected>　01. 三维CG</option></select>
+  <div data-slot="folder-picker"></div>
 </div>
 <div class="egc-field">
-  <div class="egc-label">标签（从 Eagle 点选或输入回车，仅保存到 Eagle）</div>
-  <input class="egc-input" placeholder="搜索/输入标签后按 Enter" />
-  <div class="egc-tags">
-    <button type="button" class="egc-tag-chip is-selected">参考图 ×</button>
-  </div>
-  <div class="egc-tag-catalog">
-    <button type="button" class="egc-tag-catalog-chip is-selected">参考图</button>
-    <button type="button" class="egc-tag-catalog-chip">设计</button>
-    <button type="button" class="egc-tag-catalog-chip">photo</button>
-    <button type="button" class="egc-tag-catalog-chip">抖音</button>
-  </div>
+  <div class="egc-label">标签（从 Eagle 点选或手动输入，仅保存到 Eagle）</div>
+  <div data-slot="tag-picker"></div>
 </div>
 <div class="egc-field">
   <div class="egc-label">数量上限（0 = 采集全部）</div>
-  <input class="egc-input" type="number" min="0" step="1" value="0" />
+  <input class="egc-input" data-action="limit-input" type="number" min="0" step="1" value="0" />
 </div>
 <div class="egc-actions">
   <button type="button" class="egc-btn primary" disabled>存入 Eagle</button>
@@ -79,6 +70,42 @@
     document.body.appendChild(panel.el);
     panel.open();
     launcher.setOpen(true);
+
+    // —— 模拟 Eagle 文件夹树灌入 ——
+    var folderPicker = EagleUI.createFolderPicker({
+        multiple: false,
+        rootLabel: '自动目录（抖音/作者）',
+        onChange: function (ids) { console.log('[folder] 选中:', ids); },
+    });
+    panel.el.querySelector('[data-slot="folder-picker"]').appendChild(folderPicker.el);
+    folderPicker.setFolders([
+        { id: 'F1', name: '抖音', children: [
+            { id: 'F11', name: '作者A', children: [] },
+            { id: 'F12', name: '作者B', children: [] },
+        ] },
+        { id: 'F2', name: 'Eagle丨成长', children: [
+            { id: 'F21', name: '01. 学习教程', children: [] },
+            { id: 'F22', name: '01. 三维CG', children: [] },
+        ] },
+        { id: 'F3', name: '参考图库', children: [] },
+    ]);
+
+    // —— 模拟 Eagle 标签目录灌入 ——
+    var tagPicker = EagleUI.createTagPicker({
+        recent: ['参考图', '抖音'],
+        onChange: function (selected) { console.log('[tag] 已选:', selected); },
+        onRecentChange: function (recent) { console.log('[tag] 最近:', recent); },
+    });
+    panel.el.querySelector('[data-slot="tag-picker"]').appendChild(tagPicker.el);
+    tagPicker.setTags([
+        { name: '参考图', count: 231 },
+        { name: '设计', count: 88 },
+        { name: 'photo', count: 45 },
+        { name: '抖音', count: 12 },
+        { name: '教程', count: 7 },
+        { name: '三维', count: 3 },
+    ]);
+    tagPicker.setSelected(['参考图'], true);
 </script>
 </body>
 </html>

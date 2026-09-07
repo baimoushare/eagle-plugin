@@ -9,7 +9,7 @@
 | `eagle-fab-collector.user.js` | 1.0.0 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
 | `eagle-web-collector.user.js` | 1.1.11 | Fab.com、E-Hentai、ExHentai | 综合版,批量采集页面图片,自动匹配站点目录与标签 |
 | `eagle-x-collector.user.js` | 1.1.13 | X(Twitter) | 一键下载推文图片/视频/音频,批量采集时间线与"喜欢",三层去重(本地索引 + Eagle 查重 + URL 兜底) |
-| `eagle-douyin-collector.user.js` | 0.3.0 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
+| `eagle-douyin-collector.user.js` | 0.4.0 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
 
 所有脚本均支持两种保存方式:存入 Eagle / 本地 zip 打包下载。
 
@@ -21,10 +21,11 @@
 // @require https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
 ```
 
-- 已接入:抖音版(0.3.0+);Fab / 综合版 / X 版将陆续迁移
-- 本地预览:浏览器打开 `_tm_tools/ui-preview-eagle-ui.html` 即可查看当前样式(需先在仓库根起本地服务,如 `python -m http.server 8799`)
-- 更新流程:修改 `eagle-ui.js` → push 到 GitHub main 分支 → 浏览器访问 `https://purge.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js` 清 CDN 缓存 → 已安装用户最迟一周内(Tampermonkey 外部脚本默认每周检查)自动换新
-- 库版本可在控制台查看:`window.EagleUI.version`,或在 Elements 里搜 `data-eagle-ui-version` 标签
+- 组件:悬浮启动钮、面板容器、**文件夹树选择弹层**(搜索+展开+多选/单选)、**标签选择弹层**(搜索+已选 chips+最近使用+勾选列表+手动输入)、进度条、版本徽标
+- 已接入:抖音版(0.4.0+);Fab / 综合版 / X 版将陆续迁移
+- 确认当前版本:面板标题旁的"UI x.y.z"徽标 / 控制台 `window.EagleUI.version`
+- 本地预览:仓库根起 `python -m http.server 8799`,浏览器开 `_tm_tools/ui-preview-eagle-ui.html`(含模拟 Eagle 数据,可点验两个选择器交互)
+- 更新流程:修改 `eagle-ui.js` → push 到 GitHub main 分支 → 浏览器访问 `https://purge.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js` 清 CDN 缓存 → 已安装用户最迟一周内(Tampermonkey 外部脚本默认每周检查)自动换新;脚本版本号 +0.0.1 重存可强制立即刷新
 
 ## 安装
 

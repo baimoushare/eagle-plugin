@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.3.0
+// @version      0.4.0
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -1136,7 +1136,8 @@
             launcher: null,
             statusEl: null,
             progressEl: null,
-            folderSelectEl: null,
+            folderPicker: null,
+            tagPicker: null,
             folderLimitEl: null,
             eagleDegraded: 0,
             localDirHandle: null,
@@ -1162,18 +1163,16 @@
                 const panelHandle = EagleUI.createPanel({})
                 const panel = panelHandle.el
                 panel.innerHTML = `
-<div class="egc-title">抖音采集</div>
+<div class="egc-title">抖音采集<span class="egc-version">UI ${EagleUI.version}</span></div>
 <div class="egc-status">待命</div>
 <div class="egc-progress"></div>
 <div class="egc-field">
   <div class="egc-label">Eagle 目标文件夹</div>
-  <select class="egc-select" data-action="folder-select"><option value="">自动目录（抖音/作者）</option></select>
+  <div data-slot="folder-picker"></div>
 </div>
 <div class="egc-field">
-  <div class="egc-label">标签（从 Eagle 点选或输入回车，仅保存到 Eagle）</div>
-  <input class="egc-input" data-action="tags-input" placeholder="搜索/输入标签后按 Enter" />
-  <div class="egc-tags" data-action="tags-view"></div>
-  <div class="egc-tag-catalog" data-action="tags-catalog">标签目录加载中...</div>
+  <div class="egc-label">标签（从 Eagle 点选或手动输入，仅保存到 Eagle）</div>
+  <div data-slot="tag-picker"></div>
 </div>
 <div class="egc-field">
   <div class="egc-label">数量上限（0 = 采集全部）</div>
@@ -1199,31 +1198,37 @@
                 }
                 this.statusEl = panel.querySelector('.egc-status')
                 this.progressEl = panel.querySelector('.egc-progress')
-                this.folderSelectEl = panel.querySelector('[data-action="folder-select"]')
                 this.folderLimitEl = panel.querySelector('[data-action="limit-input"]')
-                this.tagsInputEl = panel.querySelector('[data-action="tags-input"]')
-                this.tagsViewEl = panel.querySelector('[data-action="tags-view"]')
-                this.tagsCatalogEl = panel.querySelector('[data-action="tags-catalog"]')
 
-                this.folderSelectEl.onchange = async () => {
-                    await GM_setValue('edd_selected_folder_id', String(this.folderSelectEl.value || ''))
-                }
-                this.tagsInputEl.oninput = () => this.renderTagCatalog()
-                this.tagsInputEl.onkeydown = (event) => {
-                    if (event.key !== 'Enter') return
-                    event.preventDefault()
-                    const value = String(this.tagsInputEl.value || '').trim()
-                    if (!value) return
-                    if (!this.selectedTags.includes(value)) this.selectedTags.push(value)
-                    this.tagsInputEl.value = ''
-                    this.renderTags()
-                    this.renderTagCatalog()
-                }
+                // 文件夹选择器：fab 同款弹层（搜索 + 目录树 + 单选），
+                // 选中结果持久化到 edd_selected_folder_id，与旧版存储键兼容
+                this.folderPicker = EagleUI.createFolderPicker({
+                    multiple: false,
+                    rootLabel: '自动目录（抖音/作者）',
+                    onChange: (ids) => {
+                        GM_setValue('edd_selected_folder_id', String(ids[0] || ''))
+                    },
+                })
+                panel.querySelector('[data-slot="folder-picker"]').appendChild(this.folderPicker.el)
+
+                // 标签选择器：fab 同款弹层（搜索 + 已选 chips + 最近使用 + 目录勾选 + 手动输入）
+                // recentTags 仍持久化在 edd_recent_tags，选中即置顶
+                this.tagPicker = EagleUI.createTagPicker({
+                    recent: this.recentTags,
+                    onChange: (selected) => {
+                        this.selectedTags = selected
+                    },
+                    onRecentChange: (recent) => {
+                        this.recentTags = recent
+                        GM_setValue('edd_recent_tags', recent)
+                    },
+                })
+                panel.querySelector('[data-slot="tag-picker"]').appendChild(this.tagPicker.el)
+
                 panel.querySelector('[data-action="eagle"]').onclick = () => this.start('eagle')
                 panel.querySelector('[data-action="download"]').onclick = () => this.start('download')
                 panel.querySelector('[data-action="current"]').onclick = () => this.collectCurrent()
                 panel.querySelector('[data-action="stop"]').onclick = () => this.stop()
-                this.renderTags()
                 this.restoreFolderSelection()
 
                 // 初始化 1.2s 后也预拉一次，用户第一次展开就能看到可选项
@@ -1233,81 +1238,23 @@
                 }, 1200)
             },
 
-            renderTags: function () {
-                if (!this.tagsViewEl) return
-                this.tagsViewEl.innerHTML = ''
-                for (const tag of this.selectedTags) {
-                    const chip = document.createElement('button')
-                    chip.type = 'button'
-                    chip.className = 'egc-tag-chip is-selected'
-                    chip.textContent = tag + ' ×'
-                    chip.onclick = () => {
-                        this.selectedTags = this.selectedTags.filter(t => t !== tag)
-                        this.renderTags()
-                        this.renderTagCatalog()
-                    }
-                    this.tagsViewEl.appendChild(chip)
-                }
-                // 选中变化即持久化最近使用，供下次打开面板时快速再选
-                const merged = Array.from(new Set([...this.selectedTags, ...(this.recentTags || [])])).slice(0, 12)
-                this.recentTags = merged
-                GM_setValue('edd_recent_tags', merged)
-            },
-
             /**
-             * 从 Eagle 拉取标签目录渲染为可点选 chip 流。
-             * Eagle 未运行/拉取失败时显示提示文案，不影响其他功能。
+             * 从 Eagle 拉取标签目录灌入共享库标签选择器。
+             * Eagle 未运行/拉取失败时在弹层内显示提示文案，不影响其他功能。
              */
             loadTagCatalog: async function () {
-                if (!this.tagsCatalogEl) return
+                if (!this.tagPicker) return
                 if (this.tagCatalogLoading) return
                 this.tagCatalogLoading = true
+                this.tagPicker.setLoading(true)
                 try {
                     const catalog = await TDD.eagle.getTagCatalog()
                     this.eagleTags = Array.isArray(catalog?.tags) ? catalog.tags : []
-                    this.renderTagCatalog()
+                    this.tagPicker.setTags(this.eagleTags)
                 } catch (err) {
-                    if (this.tagsCatalogEl) {
-                        this.tagsCatalogEl.textContent = '标签目录不可用（Eagle 未运行或接口异常）'
-                    }
+                    this.tagPicker.setError('标签目录不可用（Eagle 未运行或接口异常）')
                 } finally {
                     this.tagCatalogLoading = false
-                }
-            },
-
-            renderTagCatalog: function () {
-                if (!this.tagsCatalogEl) return
-                if (!Array.isArray(this.eagleTags) || this.eagleTags.length === 0) {
-                    this.tagsCatalogEl.textContent = this.tagCatalogLoading ? '标签目录加载中...' : 'Eagle 暂无标签，可手动输入'
-                    return
-                }
-                const keyword = String(this.tagsInputEl?.value || '').trim().toLowerCase()
-                const names = this.eagleTags
-                    .map(tag => String(tag?.name || '').trim())
-                    .filter(Boolean)
-                const filtered = keyword
-                    ? names.filter(name => name.toLowerCase().includes(keyword))
-                    : names.slice(0, 60)
-                this.tagsCatalogEl.innerHTML = ''
-                if (filtered.length === 0) {
-                    this.tagsCatalogEl.textContent = '无匹配标签，回车可直接创建'
-                    return
-                }
-                for (const name of filtered) {
-                    const chip = document.createElement('button')
-                    chip.type = 'button'
-                    chip.className = 'egc-tag-catalog-chip' + (this.selectedTags.includes(name) ? ' is-selected' : '')
-                    chip.textContent = name
-                    chip.onclick = () => {
-                        if (this.selectedTags.includes(name)) {
-                            this.selectedTags = this.selectedTags.filter(t => t !== name)
-                        } else {
-                            this.selectedTags.push(name)
-                        }
-                        this.renderTags()
-                        this.renderTagCatalog()
-                    }
-                    this.tagsCatalogEl.appendChild(chip)
                 }
             },
 
@@ -1346,32 +1293,13 @@
             },
 
             /**
-             * 拉取 Eagle 文件夹树填充下拉框（扁平缩进展示）。
+             * 拉取 Eagle 文件夹树灌入共享库文件夹选择器（保留原始层级）。
              */
             refreshFolderOptions: async function () {
-                if (!this.folderSelectEl) return
+                if (!this.folderPicker) return
                 try {
                     const folders = await TDD.eagle.getFolders()
-                    const flat = []
-                    const walk = (nodes, depth) => {
-                        for (const node of (Array.isArray(nodes) ? nodes : [])) {
-                            if (!node || !node.id) continue
-                            flat.push({ id: node.id, name: node.name, depth })
-                            walk(node.children, depth + 1)
-                        }
-                    }
-                    walk(folders, 0)
-                    const previous = String(this.folderSelectEl.value || '')
-                    this.folderSelectEl.innerHTML = '<option value="">自动目录（抖音/作者）</option>'
-                    for (const folder of flat) {
-                        const option = document.createElement('option')
-                        option.value = folder.id
-                        option.textContent = `${'　'.repeat(folder.depth)}${folder.name}`
-                        this.folderSelectEl.appendChild(option)
-                    }
-                    if (previous && flat.some(f => f.id === previous)) {
-                        this.folderSelectEl.value = previous
-                    }
+                    this.folderPicker.setFolders(Array.isArray(folders) ? folders : [])
                 } catch (err) {
                     Log.warn('[refresh-folders]', err)
                 }
@@ -1381,7 +1309,7 @@
                 const saved = String(await GM_getValue('edd_selected_folder_id', '') || '')
                 if (saved) {
                     await this.refreshFolderOptions()
-                    if (this.folderSelectEl) this.folderSelectEl.value = saved
+                    if (this.folderPicker) this.folderPicker.setSelected([saved])
                 }
             },
 
@@ -1400,7 +1328,7 @@
                     try {
                         await TDD.eagle.checkAlive()
                         await this.refreshFolderOptions()
-                        folderParentId = String(this.folderSelectEl.value || '')
+                        folderParentId = String((this.folderPicker && this.folderPicker.getSelected()[0]) || '')
                     } catch (err) {
                         this.setText('Eagle 未连接', String(err.message || err))
                         return
@@ -1588,7 +1516,7 @@
                 this.renderButtons()
                 try {
                     await TDD.eagle.checkAlive()
-                    const folderParentId = String((this.folderSelectEl && this.folderSelectEl.value) || '')
+                    const folderParentId = String((this.folderPicker && this.folderPicker.getSelected()[0]) || '')
                     const payload = TDD.parseAwemeToTasks(aweme, {
                         extraTags: this.selectedTags,
                         folderParentId,
