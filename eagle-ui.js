@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eagle Collector UI
 // @namespace    https://github.com/baimoushare/eagle-plugin
-// @version      1.3.1
+// @version      1.3.2
 // @description  Eagle 采集插件家族共享 UI 设计库（供 @require 引用，不独立运行）
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -49,7 +49,7 @@
     }
 
     /** 库版本号（排查"用户用的是哪版 UI"的依据） */
-    const VERSION = '1.3.1';
+    const VERSION = '1.3.2';
 
     /**
      * 设计令牌 + 组件样式（单一 CSS 文本，注入一次）。
@@ -229,6 +229,7 @@
     font-size: 12px;
     font-weight: 500;
     font-family: var(--egc-font);
+    line-height: 1.35;
     cursor: pointer;
     max-width: 100%;
     min-width: 0;
@@ -887,6 +888,7 @@
     cursor: pointer;
     text-align: center;
     width: 100%;
+    box-sizing: border-box;
     max-width: 100%;
     min-width: 0;
     overflow: hidden;

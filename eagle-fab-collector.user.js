@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.1.2
+// @version      1.1.3
 // @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
@@ -2880,6 +2880,8 @@
                 },
             });
             this.collPanel.body.querySelector('#esp-tag-picker-slot').appendChild(this.tagPicker.el);
+            // 面板就绪后立即拉取标签目录(迁移修复:此前只有手动点刷新才加载)
+            this.refreshEagleTags();
 
             // ── 业务按钮绑定(沿用旧逻辑,id 不变) ──
             const body = this.collPanel.body;
