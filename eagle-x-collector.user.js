@@ -256,7 +256,7 @@
 // @connect            localhost
 // @connect            127.0.0.1
 // @connect            *
-// @version            1.2.1
+// @version            1.2.2
 // @created            2025-03-11 08:11:29
 // @modified           2026-09-08 09:20:00
 // @require            https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
