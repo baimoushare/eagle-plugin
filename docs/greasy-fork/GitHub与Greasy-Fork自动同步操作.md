@@ -1,158 +1,103 @@
-# Greasy Fork 与 GitHub 自动同步操作
+# GitHub 与 Greasy Fork 自动同步操作手册
 
-## 当前报错
+> 本文档是 Eagle 采集插件家族的发布链路终态手册(2026-09-08 配置完成并验证通过)。
+> 同一份内容存于本地知识库:《01. AI/04. AI 编程/03. 制作项目/PC程序/Greasy Fork 与 GitHub 自动同步.md》。
 
-Greasy Fork 提示：
+## 整体技术路线与流程图
 
-> 脚本同步失败 - Code 使用了一个未被允许的外部脚本：`@require https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js`
+从改代码到用户浏览器里的插件更新,整条链路共六站:
 
-这不是 GitHub 仓库权限错误，而是 Greasy Fork 在发布/同步脚本时不接受这个自有 `eagle-ui.js` 直链作为允许的外部代码来源。
+```mermaid
+flowchart TD
+    A["① 本地改代码<br>eagle-*.user.js / eagle-ui.js"] --> B["② bump 版本号<br>@version 最小位 +1<br>(改库时四脚本也要 bump)"]
+    B --> C["③ 本地验证<br>_tm_tools/ui-preview-eagle-ui.html<br>或 TM 覆盖安装自测"]
+    C --> D["④ git commit + push<br>push 到 GitHub main<br>(本机需挂系统代理)"]
+    D --> E["⑤ GitHub Webhook 通知 Greasy Fork<br>push 事件 + HMAC 签名<br>(hook id 675972794)"]
+    E --> F["⑥ GF 匹配并拉取<br>按 commits[].modified 匹配<br>脚本同步源(GitHub Raw URL)"]
+    F --> G["⑦ GF 保存新版本<br>commit message = 版本说明<br>@version 更新到脚本页"]
+    G --> H["⑧ 用户端 Tampermonkey<br>定期/手动检查更新<br>对比 @version 发现新版"]
+    H --> I["⑨ TM 更新脚本<br>并重新拉取 @require 外部库"]
+    I --> J["⑩ GF Library 分发 UI 库<br>Eagle Collector UI (ID 594761)<br>无版本号 URL = 永远最新"]
+    J --> K["用户浏览器运行新版界面<br>面板标题徽标确认 UI 版本"]
 
-## 正确架构
-
-```text
-GitHub eagle-ui.js
-        ↓ Greasy Fork Library 源码同步
-Greasy Fork 上的 Eagle UI Library
-        ↓ 四个脚本 @require GF 库地址
-Greasy Fork 上的四个用户脚本
-        ↓ 用户安装
-Tampermonkey
+    style A fill:#1f2937,color:#fff
+    style D fill:#1f2937,color:#fff
+    style E fill:#2b4a6f,color:#fff
+    style G fill:#2b4a6f,color:#fff
+    style J fill:#3a5a40,color:#fff
 ```
 
-jsDelivr 直链方案已停用（Greasy Fork 不接受自有 jsDelivr 文件作为外部 @require）。四个脚本已统一引用 Greasy Fork 托管的 Library 地址：
+### 分环节说明
 
-```text
-https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
+| 环节 | 谁在做 | 关键地址/机制 | 时效 |
+|---|---|---|---|
+| ①②③ 开发 | 本机 | 版本号必须递增,否则 TM 不识别更新 | 手动 |
+| ④ 推送 | git → GitHub | 本机 git 需临时代理:`-c http.proxy=http://127.0.0.1:7897` | 秒级 |
+| ⑤ 通知 | GitHub → GF | webhook `api.greasyfork.org/zh-CN/users/1636965-baimoushare/webhook`,push 事件,Secret 签名 | 秒级 |
+| ⑥ 匹配 | GF | 只认 `commits[].modified[]` 里的文件,与脚本同步源 raw URL 精确匹配 | 秒级 |
+| ⑦ 发版 | GF | 拉取 GitHub Raw 新内容,commit message 作为更新说明 | 秒级 |
+| ⑧⑨ 更新 | GF → TM | TM 对比 `@version`(本机 vs GF meta),更新时同步重拉 @require 库 | 定期/手动 |
+| ⑩ UI 库 | GF Library | `https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js` | 跟随脚本更新 |
+
+### 两种日常场景
+
+**场景 A:只改某个脚本**(如修抖音的采集逻辑)
+
+```
+改 eagle-douyin-collector.user.js → bump 它的 @version → commit → push
+→ webhook 只同步抖音脚本 → 用户 TM 检查更新
 ```
 
-注意：`@require` 必须使用上面的无版本号地址（永远指向最新版）；带 `/1924684/` 版本段的地址会永久锁定旧版本。
+**场景 B:改共享 UI 库**(如调面板配色/选择器交互)
 
-## 一次性设置
-
-### 1. 在 Greasy Fork 创建 Library
-
-1. 登录 Greasy Fork。
-2. 进入创建脚本/Library 的入口，选择创建 Library，而不是普通用户脚本。
-3. Library 名称建议：`Eagle Collector UI`。
-4. 将源码同步地址设置为：
-
-```text
-https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-ui.js
+```
+改 eagle-ui.js → bump 库内 VERSION → 四个脚本 @version 各 +最小位
+→ commit(四脚本在 modified 列表里,webhook 同步四个脚本)
+→ 用户更新脚本时,TM 重新拉取 Library 拿到新 UI
 ```
 
-5. 保存并记下 Greasy Fork 生成的 Library 页面地址和安装代码中的 `@require` 地址。
+> 注意:只改 eagle-ui.js 而不动四个脚本时,GF 只会更新 Library,用户端不会感知(脚本版本没变,TM 不触发更新)。所以改库必须连带 bump 四脚本。
 
-已完成：Library ID 为 `594761`，页面地址 https://greasyfork.org/zh-CN/scripts/594761 。
+### 链路卡点速查
 
-### 2. 修改四个发布版脚本的 @require
+| 症状 | 断点位置 | 排查动作 |
+|---|---|---|
+| GF 脚本页版本没变 | ⑤⑥ webhook 或匹配 | GitHub 仓库 → Settings → Webhooks → Recent Deliveries,看 push 是否 200;确认改动文件在 commit 的 modified 里 |
+| deliveries 里没有 push 记录 | ④ 没推上去 | 本机 git 是否走了代理(`-c http.proxy=...`) |
+| delivery 非 200 | ⑤ 签名/URL | Secret 与 GF webhook-info 页面一致;Payload URL 原样复制 |
+| GF 更新了但 TM 没提示 | ②⑧ 版本号 | 本次发布是否递增了 @version;TM 手动"检查更新" |
+| 脚本能更新但界面没变化 | ⑩ 库没更新 | Library 页面版本是否最新;脚本 @require 是否用无版本号地址 |
+| push 了但 GF 毫无反应(且无 webhook 报错) | ⑥ 只新增了文件 | GF 只匹配 modified,纯新增文件不触发;先在 GF 建好同步源再改文件 |
 
-已完成：四个脚本的 `@require` 已统一替换为
+## 当前配置状态(2026-09-08)
 
-```javascript
-https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
-```
+- **Greasy Fork Library**:「Eagle Collector UI」,ID `594761`,页面 https://greasyfork.org/zh-CN/scripts/594761
+  - 同步源:`https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-ui.js`
+  - 引用地址(**无版本号=永远最新**,勿用带 `/1924684/` 版本段的链接):
+    `https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js`
+- **四个脚本同步源**(GF 脚本管理页"源码同步"处填写):
+  - `https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-fab-collector.user.js`
+  - `https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-web-collector.user.js`
+  - `https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-x-collector.user.js`
+  - `https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-douyin-collector.user.js`
+- **GitHub Webhook**:hook id `675972794`,Payload URL = GF 专属地址,`application/json`,仅 push 事件,Secret 已配置,ping/push 投递均验证 200
 
-该地址对 GitHub 直装与 Greasy Fork 安装同样适用（Tampermonkey 均可拉取）。
+## 历史报错与原因(已解决)
 
-### 3. 配置 Greasy Fork 脚本源码同步
+Greasy Fork 曾拒绝脚本直接引用自有 jsDelivr 文件:
 
-四个脚本分别设置 GitHub Raw 源码同步地址：
+> 脚本同步失败 - Code 使用了一个未被允许的外部脚本:`@require https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js`
 
-```text
-https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-fab-collector.user.js
-https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-web-collector.user.js
-https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-x-collector.user.js
-https://raw.githubusercontent.com/baimoushare/eagle-plugin/main/eagle-douyin-collector.user.js
-```
-
-先保存同步地址，再配置 Webhook。
-
-### 4. 获取 Greasy Fork Webhook 信息
-
-打开：
-
-<https://greasyfork.org/zh-CN/users/webhook-info>
-
-登录后：
-
-1. 找到 GitHub 配置区域。
-2. 点击 `Generate` 生成 Webhook Secret。
-3. 复制页面显示的 `Payload URL`。
-4. Secret 只用于验证 Webhook 签名，不是 GitHub PAT，不要放进仓库。
-
-页面生成的 Payload URL 应原样复制，不要自行拼接；当前格式通常类似：
-
-```text
-https://api.greasyfork.org/zh-CN/users/<你的用户ID>/webhook
-```
-
-### 5. 配置 GitHub Webhook
-
-GitHub 仓库 → `Settings` → `Webhooks` → `Add webhook`：
-
-- `Payload URL`：粘贴 Greasy Fork 页面生成的 URL；
-- `Content type`：选择 `application/json`；
-- `Secret`：粘贴 Greasy Fork 生成的 Secret；
-- Events：选择 `Just the push event`；
-- `Active`：勾选；
-- 保存。
-
-进入 Webhook 的 `Recent Deliveries`，看到 ping/push 返回 2xx，说明连接成功。
-
-## 日常更新流程
-
-### 只改某个脚本
-
-```text
-修改脚本
-→ 增加 @version
-→ 本地测试
-→ git commit
-→ git push
-→ GitHub Webhook 通知 Greasy Fork
-→ Greasy Fork 根据 modified 文件同步对应脚本
-→ Tampermonkey 检查更新
-```
-
-### 修改共享 UI 库
-
-只改 `eagle-ui.js` 时，GitHub Webhook 只会同步 Library，不会自动改变四个用户脚本的版本。
-
-推荐流程：
-
-```text
-修改 eagle-ui.js
-→ 增加 eagle-ui.js 的 @version
-→ 修改四个用户脚本的 @version
-→ 确认四个脚本 @require 指向 GF Library
-→ git push
-→ Webhook 同步 Library 和四个脚本
-→ 用户端 Tampermonkey 重新拉取脚本和外部 Library
-```
-
-若脚本用户需要立即更新，可以在 Tampermonkey 中手动执行“检查更新”，或临时将外部脚本检查周期调短。
-
-## 常见失败原因
-
-- Greasy Fork Library 尚未创建，脚本仍直接 `@require` jsDelivr 自有文件；
-- 四个脚本在 GF 中没有设置 GitHub Raw 同步地址；
-- GitHub Webhook 的 Content type 不是 `application/json`；
-- Secret 与 Greasy Fork 页面生成的不一致；
-- 只新增文件但没有修改文件，Webhook 当前主要匹配 `commits[].modified[]`；
-- 脚本 `@version` 没有增加，GF 可能保存版本，但 Tampermonkey 可能不识别为升级；
-- 把 GitHub PAT 填到了 Webhook Secret；
-- GitHub 仓库设为私有，Greasy Fork 无法匿名读取 Raw URL。
+根因:GF 外部代码政策不接受不受认可来源的自有直链。解决:库改以 GF Library 分发,脚本 @require 引用 GF 托管地址;jsDelivr 方案整体停用。
 
 ## 私有仓库限制
 
-GitHub 私有仓库不能直接作为当前 Greasy Fork 同步源，Webhook Secret 也不能代替 GitHub 访问令牌。仓库需要保持公开，才能同时使用 GitHub Raw、jsDelivr 和 Greasy Fork 自动同步。
+GitHub 私有仓库无法用于本链路:GF 同步源与 webhook 都要求匿名可读的公开 URL;webhook Secret 只是签名密钥,不能代替 GitHub 访问令牌。仓库须保持 Public。
 
 ## 官方来源
 
 - <https://greasyfork.org/zh-CN/users/webhook-info>
 - <https://greasyfork.org/zh-CN/help/external-scripts>
-- <https://github.com/greasyfork-org/greasyfork>
 - <https://github.com/greasyfork-org/greasyfork/blob/main/app/views/users/webhook_info.html.erb>
 - <https://github.com/greasyfork-org/greasyfork/blob/main/app/controllers/concerns/webhooks.rb>
 - <https://github.com/greasyfork-org/greasyfork/blob/main/lib/github.rb>

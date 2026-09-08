@@ -1,3 +1,12 @@
+// ==UserScript==
+// @name         Eagle Collector UI
+// @namespace    https://github.com/baimoushare/eagle-plugin
+// @version      1.3.1
+// @description  Eagle 采集插件家族共享 UI 设计库（供 @require 引用，不独立运行）
+// @author       laobai
+// @license      Copyright (c) 2026 laobai. All rights reserved.
+// ==/UserScript==
+
 /**
  * eagle-ui.js —— Eagle 采集插件家族 · 共享 UI 设计库
  * ============================================================
@@ -5,10 +14,10 @@
  * 定位：所有 eagle-*-collector 油猴脚本共用的前端设计体系（单一事实源）。
  * 各脚本通过 Tampermonkey 的 @require 引用本文件：
  *
- *   // @require https://cdn.jsdelivr.net/gh/baimoushare/eagle-plugin@main/eagle-ui.js
+ *   // @require https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
  *
- * 修改本文件 → push → 访问 purge.jsdelivr.net 同路径清缓存，
- * 全部已安装脚本即统一换上新 UI，无需逐个改脚本。
+ * 修改本文件 → push GitHub → Greasy Fork 库经 webhook 自动同步，
+ * 再 bump 各脚本 @version 触发油猴重拉外部库，全部脚本即统一换上新 UI。
  *
  * 设计基因来源：eagle-fab-collector 的面板与选择器视觉体系（毛玻璃、白玻璃
  * 控件、蓝色选中态、缓出动画曲线、body 顶层弹层选择器），视觉数值全部
