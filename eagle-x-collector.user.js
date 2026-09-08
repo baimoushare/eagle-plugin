@@ -256,7 +256,7 @@
 // @connect            localhost
 // @connect            127.0.0.1
 // @connect            *
-// @version            1.2.2
+// @version            1.3.0
 // @created            2025-03-11 08:11:29
 // @modified           2026-09-08 09:20:00
 // @require            https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
@@ -2583,8 +2583,11 @@ const TMD = (function () {
 
                 // 文件夹选择器:fab 同款弹层(搜索+树+单选+刷新),选择写入全局变量与 GM 存储(键不变)
                 this.folderPicker = EagleUI.createFolderPicker({
-                    multiple: false,
                     rootLabel: () => `自动目录：${ctx.getEagleRootPathText()} / ${ctx.getEagleChildTemplateText()}`,
+                    recent: (Array.isArray(GM_getValue('eagle_recent_folders', [])) ? GM_getValue('eagle_recent_folders', []) : []).map(String),
+                    onRecentChange: (ids) => {
+                        GM_setValue('eagle_recent_folders', ids)
+                    },
                     onRefresh: () => this.refreshFolderOptions(ctx, true),
                     onChange: (ids) => {
                         eagle_selected_folder_id = String(ids[0] || '')

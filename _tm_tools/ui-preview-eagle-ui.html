@@ -5,14 +5,12 @@
 <title>Eagle 家族 UI 预览（eagle-ui.js）</title>
 <!--
   本地预览页：起本地服务(python -m http.server 8799)后浏览器打开。
-  面板结构与 eagle-douyin-collector 一致，选择器灌入模拟 Eagle 数据，
-  可完整点验:文件夹树搜索/展开/单选、标签勾选/最近/手输/Esc 关闭。
+  右侧 = 抖音采集面板结构(选择器可点验)；左侧 = 库 v1.3.0 新组件演示(折叠面板/mode卡/连接状态/进度/本地目录行/help)。
 -->
 <style>
     body {
         margin: 0;
         min-height: 100vh;
-        /* 模拟抖音深色页面环境，检验毛玻璃面板在不同亮度下的观感 */
         background: linear-gradient(135deg, #16181d 0%, #1f232b 55%, #262b35 100%);
         font-family: "Segoe UI", system-ui, sans-serif;
     }
@@ -25,12 +23,41 @@
         z-index: 200000;
     }
     .tip b { color: rgba(255, 255, 255, 0.75); }
+    /* 左侧新组件演示区 */
+    .demo {
+        position: fixed;
+        left: 24px;
+        top: 48px;
+        width: 340px;
+        padding: 12px 14px 14px;
+        border: 1px dashed rgba(255,255,255,0.18);
+        border-radius: 12px;
+        color: #edf1f7;
+        font-size: 12px;
+        z-index: 99990;
+    }
+    .demo h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: rgba(235,240,248,0.72); }
+    .demo .row { margin-bottom: 10px; }
+    .demo .lbl { font-size: 10px; color: rgba(235,240,248,0.46); margin: 6px 0 4px; }
 </style>
 </head>
 <body>
 <div class="tip">
     本地静态预览（模拟 Eagle 数据）｜库版本 <b id="ui-version">未知</b><br>
-    演示内容 = 抖音采集面板结构；可点开两个选择器验证弹层交互
+    右 = 抖音面板结构；左 = v1.3.0 新组件演示（折叠球在中上位置可点击）
+</div>
+
+<!-- 左侧:新组件裸演示(不经折叠面板) -->
+<div class="demo">
+    <h3>库 v1.3.0 组件演示</h3>
+    <div class="row" id="demo-conn"></div>
+    <div class="lbl">mode 切换</div>
+    <div class="row" id="demo-mode"></div>
+    <div class="lbl">进度区</div>
+    <div class="row" id="demo-progress"></div>
+    <div class="lbl">本地目录行</div>
+    <div class="row" id="demo-local"></div>
+    <div class="lbl">help 提示 <span id="demo-help-slot"></span></div>
 </div>
 
 <script src="../eagle-ui.js"></script>
@@ -71,10 +98,12 @@
     panel.open();
     launcher.setOpen(true);
 
-    // —— 模拟 Eagle 文件夹树灌入 ——
+    // —— 文件夹选择器:单选 + 最近使用 ——
+    var recentFolders = [];
     var folderPicker = EagleUI.createFolderPicker({
-        multiple: false,
         rootLabel: '自动目录（抖音/作者）',
+        recent: recentFolders,
+        onRecentChange: function (ids) { recentFolders = ids; console.log('[folder] 最近:', ids); },
         onChange: function (ids) { console.log('[folder] 选中:', ids); },
     });
     panel.el.querySelector('[data-slot="folder-picker"]').appendChild(folderPicker.el);
@@ -90,7 +119,7 @@
         { id: 'F3', name: '参考图库', children: [] },
     ]);
 
-    // —— 模拟 Eagle 标签目录灌入 ——
+    // —— 标签选择器:分组 + 手输 ——
     var tagPicker = EagleUI.createTagPicker({
         recent: ['参考图', '抖音'],
         onChange: function (selected) { console.log('[tag] 已选:', selected); },
@@ -105,12 +134,70 @@
         { name: '教程', count: 7 },
         { name: '三维', count: 3 },
     ]);
-    // 分组演示(X 脚本场景):灌入分组后列表按"分组/未分组"分区渲染
     tagPicker.setGroups([
         { id: 'g1', name: '素材库', tags: ['参考图', 'photo'] },
         { id: 'g2', name: '学习', tags: ['教程', '三维'] },
     ]);
     tagPicker.setSelected(['参考图'], true);
+
+    // ════ 左侧新组件演示 ════
+    // 折叠面板(演示用,避开右侧抖音面板)
+    var coll = EagleUI.createCollapsiblePanel({
+        title: 'Eagle 批量采集',
+        subtitle: 'Fab · 商品详情',
+        icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" stroke="currentColor" stroke-width="1.5"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 15.5h7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M18.4 6.2v10.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M15.9 13.9l2.5 2.5 2.5-2.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        top: '150px',
+        startCollapsed: false,
+    });
+    document.body.appendChild(coll.el);
+    var conn = EagleUI.createConnectionStatus('检测中');
+    coll.subRow.appendChild(conn.el);
+    coll.body.innerHTML = '<div class="egc-status">折叠面板内容区(fab/web 迁移后填充)</div>';
+
+    // 连接状态演示(轮播三态)
+    var connDemo = EagleUI.createConnectionStatus('检测中');
+    document.getElementById('demo-conn').appendChild(connDemo.el);
+    var connStates = ['pending', 'connected', 'disconnected'];
+    var connLabels = { pending: '检测中', connected: '已连接', disconnected: '未连接' };
+    var connIdx = 0;
+    setInterval(function () {
+        connIdx = (connIdx + 1) % 3;
+        connDemo.set(connStates[connIdx], connLabels[connStates[connIdx]]);
+        conn.set(connStates[connIdx], connLabels[connStates[connIdx]]);
+    }, 1500);
+
+    // mode 切换演示
+    var mode = EagleUI.createModeSwitch({
+        options: [
+            { value: 'eagle', label: '保存到 Eagle' },
+            { value: 'local', label: '本地下载' },
+        ],
+        value: 'eagle',
+        onChange: function (v) { console.log('[mode]', v); },
+    });
+    document.getElementById('demo-mode').appendChild(mode.el);
+
+    // 进度区演示
+    var prog = EagleUI.createProgress();
+    document.getElementById('demo-progress').appendChild(prog.el);
+    prog.show('准备就绪', 0);
+    var pct = 0;
+    setInterval(function () {
+        pct = (pct + 7) % 105;
+        prog.setText('采集进度 ' + Math.min(pct, 100) + '%');
+        prog.setBar(pct);
+    }, 400);
+
+    // 本地目录行演示
+    var local = EagleUI.createLocalFolderRow({
+        label: '默认下载文件夹',
+        hint: '点击选择下载目录；未选择时使用浏览器默认下载目录。',
+        onPick: function () { local.setLabel('D:\\素材库\\Eagle'); },
+    });
+    document.getElementById('demo-local').appendChild(local.el);
+
+    // help 演示
+    document.getElementById('demo-help-slot').appendChild(EagleUI.createHelp('选择将采集结果保存到 Eagle，或直接下载到浏览器默认目录。'));
 </script>
 </body>
 </html>

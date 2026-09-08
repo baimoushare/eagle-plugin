@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.4.2
+// @version      0.5.0
 // @modified      2026-09-08
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
@@ -1204,8 +1204,11 @@
                 // 文件夹选择器：fab 同款弹层（搜索 + 目录树 + 单选），
                 // 选中结果持久化到 edd_selected_folder_id，与旧版存储键兼容
                 this.folderPicker = EagleUI.createFolderPicker({
-                    multiple: false,
                     rootLabel: '自动目录（抖音/作者）',
+                    recent: (Array.isArray(GM_getValue('edd_recent_folders', [])) ? GM_getValue('edd_recent_folders', []) : []).map(String),
+                    onRecentChange: (ids) => {
+                        GM_setValue('edd_recent_folders', ids)
+                    },
                     onChange: (ids) => {
                         GM_setValue('edd_selected_folder_id', String(ids[0] || ''))
                     },
