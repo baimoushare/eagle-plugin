@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音视频图集批量保存到Eagle
 // @namespace    eagle-douyin-collector
-// @version      0.5.3
+// @version      0.5.4
 // @modified      2026-09-08
 // @description  在抖音网页版批量采集作者作品/喜欢列表的视频与图集，可保存到 Eagle 或本地下载，自动建目录、打标签、三层去重
 // @author       laobai
@@ -1148,61 +1148,87 @@
             eagleTags: [],
             tagCatalogLoading: false,
 
+
             init: function () {
                 if (this.panel) return
                 this.recentTags = Array.isArray(GM_getValue('edd_recent_tags', [])) ? GM_getValue('edd_recent_tags', []) : []
-                // UI 外壳交给家族共享库（eagle-ui.js）：样式、开合动画、设计令牌统一由库维护，
-                // 本脚本只负责面板内容结构与业务行为。
-                const launcherHandle = EagleUI.createLauncher({
+                this.actionMode = GM_getValue('edd_action_mode', 'eagle') || 'eagle'
+                // UI 外壳:家族共享库折叠面板(悬浮球 ↔ 展开),与 fab/X 同款范式。
+                const collPanel = EagleUI.createCollapsiblePanel({
                     title: '抖音采集',
+                    subtitle: '抖音 · 作者页',
                     icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="12" height="8.5" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6.1 10l2.1-2.3 2.3 2.8 2-1.7M8 15.5h7.5M18.4 6.2v10.1M15.9 13.9l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
                 })
-                const launcher = launcherHandle.el
-                document.body.appendChild(launcher)
-                this.launcher = launcher
+                this.collPanel = collPanel
+                this.panel = collPanel.el
+                collPanel.el.querySelector('.egc-coll-title').appendChild(EagleUI.versionBadge())
+                this.connStatus = EagleUI.createConnectionStatus('检测中')
+                collPanel.subRow.appendChild(this.connStatus.el)
 
-                const panelHandle = EagleUI.createPanel({})
-                const panel = panelHandle.el
-                panel.innerHTML = `
-<div class="egc-title">抖音采集<span class="egc-version">UI ${EagleUI.version}</span></div>
-<div class="egc-status">待命</div>
-<div class="egc-progress"></div>
-<div class="egc-field">
+                collPanel.body.innerHTML = `
+<div id="edd-progress" class="egc-progress-block">
+  <div id="edd-progress-text" class="egc-progress-text">待命</div>
+  <div class="egc-progress-bar-outer"><div id="edd-progress-bar" class="egc-progress-bar-inner"></div></div>
+</div>
+<div id="edd-mode-group"></div>
+<div id="edd-eagle-folder-section" class="egc-field egc-config-section">
   <div class="egc-label">Eagle 目标文件夹</div>
-  <div data-slot="folder-picker"></div>
+  <div id="edd-folder-picker-slot"></div>
 </div>
-<div class="egc-field">
-  <div class="egc-label">标签（从 Eagle 点选或手动输入，仅保存到 Eagle）</div>
-  <div data-slot="tag-picker"></div>
+<div id="edd-local-folder-section" style="display:none;">
+  <div class="egc-local-row">
+    <button id="edd-local-folder-trigger" type="button" class="egc-local-trigger">默认下载文件夹</button>
+  </div>
+  <div class="egc-local-hint">点击上方按钮即可选择下载目录；未选择时开始采集后再选。</div>
 </div>
-<div class="egc-field">
-  <div class="egc-label">数量上限（0 = 采集全部）</div>
-  <input class="egc-input" data-action="limit-input" type="number" min="0" step="1" value="0" />
+<div id="edd-eagle-tags-section" class="egc-field egc-config-section">
+  <div class="egc-label">标签（仅保存到 Eagle）</div>
+  <div id="edd-tag-picker-slot"></div>
 </div>
-<div class="egc-actions">
-  <button type="button" class="egc-btn primary" data-action="eagle">存入 Eagle</button>
-  <button type="button" class="egc-btn" data-action="download">本地下载</button>
-  <button type="button" class="egc-btn" data-action="current">存当前作品到Eagle</button>
-  <button type="button" class="egc-btn ghost" data-action="stop">停止</button>
+<div id="edd-limit-row" class="egc-switch-row egc-config-section">
+  <label class="egc-switch-label" for="edd-limit-input">数量上限（0 = 全部）</label>
+  <input id="edd-limit-input" class="egc-checkbox" data-action="limit-input" type="number" min="0" step="1" value="0" />
 </div>
+<button id="edd-btn-current" type="button" class="egc-btn secondary full">存当前作品到Eagle</button>
+<button id="edd-btn-start" type="button" class="egc-btn start full"><span class="egc-btn-label">开始采集</span></button>
+<div id="edd-control-row" class="egc-btn-row" style="display:none;">
+  <button id="edd-btn-stop" type="button" class="egc-btn danger">停止</button>
+</div>
+<div id="edd-status" class="egc-status">待命</div>
 `
-                document.body.appendChild(panel)
-                this.panel = panel
-                // 面板每次展开时刷新 Eagle 目录与标签（Eagle 未运行则静默保持占位提示）
-                launcher.onclick = () => {
-                    const open = panelHandle.toggle()
-                    launcherHandle.setOpen(open)
-                    if (open) {
-                        this.refreshFolderOptions()
-                        this.loadTagCatalog()
-                    }
-                }
-                this.statusEl = panel.querySelector('.egc-status')
-                this.progressEl = panel.querySelector('.egc-progress')
-                this.folderLimitEl = panel.querySelector('[data-action="limit-input"]')
+                document.body.appendChild(this.panel)
+                this.statusEl = collPanel.body.querySelector('#edd-status')
+                this.progressEl = collPanel.body.querySelector('#edd-progress-text')
+                this.folderLimitEl = collPanel.body.querySelector('[data-action="limit-input"]')
 
-                // 文件夹选择器：fab 同款弹层（搜索 + 目录树 + 单选），
-                // 选中结果持久化到 edd_selected_folder_id，与旧版存储键兼容
+                // ── 保存方式切换(mode 卡,家族统一组件;local=本地下载) ──
+                this.modeSwitch = EagleUI.createModeSwitch({
+                    options: [
+                        { value: 'eagle', label: '存入 Eagle' },
+                        { value: 'local', label: '本地下载' },
+                    ],
+                    value: this.actionMode,
+                    onChange: (mode) => this.setActionMode(mode),
+                })
+                collPanel.body.querySelector('#edd-mode-group').appendChild(this.modeSwitch.el)
+                this.updateActionModeUI()
+
+                // 本地下载目录行:复用 TDD.localDownload 的目录授权,start('download') 会优先复用已选目录
+                this.localFolderRow = EagleUI.createLocalFolderRow({
+                    label: '默认下载文件夹',
+                    hint: '点击选择下载目录；未选择时开始采集后再选。',
+                    onPick: async () => {
+                        try {
+                            const handle = await TDD.localDownload.ensureDirectory(true)
+                            if (handle && this.localFolderRow) this.localFolderRow.setLabel(handle.name || '已选择目录')
+                        } catch (err) { /* 用户取消选择目录,静默保持原状 */ }
+                    },
+                })
+                const localRowWrap = collPanel.body.querySelector('#edd-local-folder-section')
+                if (localRowWrap) localRowWrap.innerHTML = ''
+                if (localRowWrap && this.localFolderRow) localRowWrap.appendChild(this.localFolderRow.el)
+
+                // 文件夹选择器:配置与旧版一致(fab 同款弹层,搜索+目录树+单选)
                 this.folderPicker = EagleUI.createFolderPicker({
                     rootLabel: '自动目录（抖音/作者）',
                     recent: (Array.isArray(GM_getValue('edd_recent_folders', [])) ? GM_getValue('edd_recent_folders', []) : []).map(String),
@@ -1213,10 +1239,9 @@
                         GM_setValue('edd_selected_folder_id', String(ids[0] || ''))
                     },
                 })
-                panel.querySelector('[data-slot="folder-picker"]').appendChild(this.folderPicker.el)
+                collPanel.body.querySelector('#edd-folder-picker-slot').appendChild(this.folderPicker.el)
 
-                // 标签选择器：fab 同款弹层（搜索 + 已选 chips + 最近使用 + 目录勾选 + 手动输入）
-                // recentTags 仍持久化在 edd_recent_tags，选中即置顶
+                // 标签选择器:recentTags 持久化在 edd_recent_tags
                 this.tagPicker = EagleUI.createTagPicker({
                     recent: this.recentTags,
                     onChange: (selected) => {
@@ -1227,12 +1252,12 @@
                         GM_setValue('edd_recent_tags', recent)
                     },
                 })
-                panel.querySelector('[data-slot="tag-picker"]').appendChild(this.tagPicker.el)
+                collPanel.body.querySelector('#edd-tag-picker-slot').appendChild(this.tagPicker.el)
 
-                panel.querySelector('[data-action="eagle"]').onclick = () => this.start('eagle')
-                panel.querySelector('[data-action="download"]').onclick = () => this.start('download')
-                panel.querySelector('[data-action="current"]').onclick = () => this.collectCurrent()
-                panel.querySelector('[data-action="stop"]').onclick = () => this.stop()
+                collPanel.body.querySelector('#edd-btn-start').onclick = () =>
+                    this.start(this.actionMode === 'local' ? 'download' : 'eagle')
+                collPanel.body.querySelector('#edd-btn-current').onclick = () => this.collectCurrent()
+                collPanel.body.querySelector('#edd-btn-stop').onclick = () => this.stop()
                 this.restoreFolderSelection()
 
                 // 初始化 1.2s 后也预拉一次，用户第一次展开就能看到可选项
@@ -1241,6 +1266,26 @@
                     this.loadTagCatalog()
                 }, 1200)
             },
+
+            /** 切换保存方式并持久化 */
+            setActionMode: function (mode) {
+                this.actionMode = mode
+                GM_setValue('edd_action_mode', mode)
+                this.updateActionModeUI()
+            },
+
+            /** 本地下载模式下切换目录行与 Eagle 专属配置的显隐 */
+            updateActionModeUI: function () {
+                const mode = this.actionMode
+                const folderSection = this.panel && this.panel.querySelector('#edd-eagle-folder-section')
+                const localSection = this.panel && this.panel.querySelector('#edd-local-folder-section')
+                const tagsSection = this.panel && this.panel.querySelector('#edd-eagle-tags-section')
+                if (folderSection) folderSection.style.display = mode === 'local' ? 'none' : 'block'
+                if (localSection) localSection.style.display = mode === 'local' ? 'block' : 'none'
+                if (tagsSection) tagsSection.classList.toggle('disabled', mode === 'local')
+                if (this.modeSwitch) this.modeSwitch.set(mode, true)
+            },
+
 
             /**
              * 从 Eagle 拉取标签目录灌入共享库标签选择器。
@@ -1264,7 +1309,12 @@
 
             setText: function (status, progress) {
                 if (this.statusEl && typeof status !== 'undefined') this.statusEl.textContent = status
-                if (this.progressEl && typeof progress !== 'undefined') this.progressEl.textContent = progress
+                if (this.progressEl && typeof progress !== 'undefined') {
+                    this.progressEl.textContent = progress
+                    // 进度块与 fab 同款:有进度文字才显示,结束后自动收起
+                    const block = this.progressEl.closest('.egc-progress-block')
+                    if (block) block.classList.toggle('visible', !!String(progress).trim())
+                }
             },
 
             formatProgress: function (suffix = '') {
@@ -1304,7 +1354,9 @@
                 try {
                     const folders = await TDD.eagle.getFolders()
                     this.folderPicker.setFolders(Array.isArray(folders) ? folders : [])
+                    if (this.connStatus) this.connStatus.set('connected')
                 } catch (err) {
+                    if (this.connStatus) this.connStatus.set('disconnected')
                     Log.warn('[refresh-folders]', err)
                 }
             },
@@ -1543,10 +1595,14 @@
 
             renderButtons: function () {
                 if (!this.panel) return
-                for (const action of ['eagle', 'download', 'current']) {
-                    const btn = this.panel.querySelector(`[data-action="${action}"]`)
-                    if (btn) btn.disabled = this.running
-                }
+                const startBtn = this.panel.querySelector('#edd-btn-start')
+                const currentBtn = this.panel.querySelector('#edd-btn-current')
+                const stopBtn = this.panel.querySelector('#edd-btn-stop')
+                const controlRow = this.panel.querySelector('#edd-control-row')
+                if (startBtn) startBtn.disabled = this.running
+                if (currentBtn) currentBtn.disabled = this.running
+                if (controlRow) controlRow.style.display = this.running ? 'flex' : 'none'
+                if (stopBtn) stopBtn.disabled = !this.running
             },
 
             stop: function () {

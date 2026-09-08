@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.1.5
+// @version      1.1.6
 // @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
@@ -2802,7 +2802,7 @@
                     <div id="esp-progress-text" class="egc-progress-text">准备就绪</div>
                     <div class="egc-progress-bar-outer"><div id="esp-progress-bar" class="egc-progress-bar-inner"></div></div>
                 </div>
-                <div id="esp-mode-card" class="egc-mode-card"><div id="esp-mode-group" class="egc-mode-grid"></div></div>
+                <div id="esp-mode-group"></div>
                 <div id="esp-eagle-folder-section" class="egc-field egc-config-section">
                     <div class="egc-label" id="lbl-folder">Eagle 目标文件夹</div>
                     <div id="esp-folder-picker-slot"></div>
