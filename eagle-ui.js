@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eagle Collector UI
 // @namespace    https://github.com/baimoushare/eagle-plugin
-// @version      1.3.2
+// @version      1.3.3
 // @description  Eagle 采集插件家族共享 UI 设计库（供 @require 引用，不独立运行）
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -49,7 +49,7 @@
     }
 
     /** 库版本号（排查"用户用的是哪版 UI"的依据） */
-    const VERSION = '1.3.2';
+    const VERSION = '1.3.3';
 
     /**
      * 设计令牌 + 组件样式（单一 CSS 文本，注入一次）。
@@ -219,6 +219,14 @@
 
 /* ── 按钮区 / 按钮（primary 为主操作，ghost 为轻操作） ── */
 .egc-actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+/* 宿主页面对 button 的全局样式防御(如 fab.com 的 min-width 会撑爆网格),
+   参照 web 旧版经验,作用域限定在面板/折叠面板/弹层内部,不影响宿主页面 */
+.egc-panel button, .egc-coll button, .egc-menu button {
+    min-width: 0 !important;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-family: var(--egc-font);
+}
 .egc-btn {
     appearance: none;
     border: 1px solid var(--egc-border-soft);
@@ -889,6 +897,7 @@
     text-align: center;
     width: 100%;
     box-sizing: border-box;
+    font-family: var(--egc-font);
     max-width: 100%;
     min-width: 0;
     overflow: hidden;

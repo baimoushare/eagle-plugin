@@ -256,7 +256,7 @@
 // @connect            localhost
 // @connect            127.0.0.1
 // @connect            *
-// @version            1.3.1
+// @version            1.3.2
 // @created            2025-03-11 08:11:29
 // @modified           2026-09-08 09:20:00
 // @require            https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
@@ -2556,7 +2556,7 @@ const TMD = (function () {
                 panel.innerHTML = `
 <div class="egc-title">${lang.batch_title}<span class="egc-version">UI ${EagleUI.version}</span></div>
 <div class="egc-status">${lang.batch_idle}</div>
-<div class="egc-progress">${lang.batch_idle}</div>
+<div class="egc-progress"></div>
 <div class="egc-field">
   <div class="egc-label">Eagle 目标文件夹</div>
   <div data-slot="folder-picker"></div>
