@@ -2,6 +2,7 @@
 // @name         网页图片批量保存到Eagle
 // @namespace    eagle-web-collector
 // @version      1.1.13
+// @modified      2026-09-08
 // @description  在 Fab.com、E-Hentai 等页面批量采集图片，可保存到 Eagle 或本地下载
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.

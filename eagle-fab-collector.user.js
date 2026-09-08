@@ -2,6 +2,7 @@
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
 // @version      1.0.2
+// @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.

@@ -258,7 +258,7 @@
 // @connect            *
 // @version            1.2.1
 // @created            2025-03-11 08:11:29
-// @modified           2026-08-28 11:05:00
+// @modified           2026-09-08 09:20:00
 // @require            https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js
 // @require            https://update.greasyfork.org/scripts/594761/Eagle%20Collector%20UI.js
 // 本地定制脚本不保留上游自动更新地址，避免 Tampermonkey 用原版覆盖 Eagle 集成。
