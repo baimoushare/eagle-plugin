@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.0.4
+// @version      1.1.0
 // @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
@@ -51,6 +51,7 @@
         folderIds: 'eagle.scraper.folderIds',
         actionMode: 'eagle.scraper.actionMode',
         recentTags: 'eagle.scraper.recentTags',
+        recentFolders: 'eagle.scraper.recentFolders',
         selectedTagsBySite: 'eagle.scraper.selectedTagsBySite',
         // 旧版全局已选标签 Key，仅用于升级时清理，不再读取。
         selectedTags: 'eagle.scraper.selectedTags',
@@ -2716,15 +2717,11 @@
         folderId: '',           // 选中的 Eagle 文件夹 ID
         selectedFolderIds: [],   // 参考 Eagle 官方采集器：允许同时选择多个目标文件夹
         folders: [],            // Eagle 文件夹列表
-        folderExpandedIds: new Set(['']),
-        folderSearchKeyword: '',
-        tagSearchKeyword: '',
         selectedTags: [],
         selectedTagsBySite: {},
         recentTags: [],
         eagleTags: [],
         eagleTagGroups: [],
-        tagGroupsCollapsed: new Set(),
         tagCatalogLoading: false,
         tagCatalogError: '',
         connectionCheckId: 0, // 防止并发刷新目录时，旧请求把新状态覆盖回“检测中”
@@ -2737,6 +2734,7 @@
          */
         init(siteInfo) {
             this.siteInfo = siteInfo;
+            // ── 读取持久化配置(键与逻辑沿用旧版,用户数据无缝) ──
             try {
                 const savedMode = GM_getValue(STORAGE_KEYS.actionMode, 'eagle');
                 this.actionMode = savedMode === 'local' ? 'local' : 'eagle';
@@ -2746,8 +2744,7 @@
             try {
                 const savedTags = GM_getValue(STORAGE_KEYS.recentTags, []);
                 this.recentTags = Array.isArray(savedTags) ? savedTags.filter(Boolean).slice(0, 24) : [];
-                // 旧版本把“已选标签”当成全局偏好保存，导致从 Fab 切到 E-Hentai
-                // 仍会携带上一站标签。新版按 hostname 隔离，最近使用标签仍保持全局可复用。
+                // 按站点(hostname)隔离已选标签,最近使用保持全局可复用。
                 const savedTagsBySite = GM_getValue(STORAGE_KEYS.selectedTagsBySite, {});
                 this.selectedTagsBySite = savedTagsBySite && typeof savedTagsBySite === 'object' && !Array.isArray(savedTagsBySite)
                     ? savedTagsBySite
@@ -2764,1434 +2761,19 @@
             try {
                 const savedFolderIds = GM_getValue(STORAGE_KEYS.folderIds, []);
                 this.selectedFolderIds = Array.isArray(savedFolderIds)
-                    ? savedFolderIds.filter(Boolean).map(String)
+                    ? savedFolderIds.filter(Boolean).map(String).slice(0, 1)   // 单选语义:只取一个
                     : [];
             } catch (err) {
                 this.selectedFolderIds = [];
             }
-
-            // 创建面板主容器
-            this.container = document.createElement('div');
-            this.container.id = 'eagle-scraper-panel';
-            this._createStyles();
-            this._buildPanel();
-
-            // 家族共享库版本徽标:确认当前生效的 eagle-ui 版本
             try {
-                const badge = EagleUI.versionBadge();
-                this.container.querySelector('.esp-header-title')?.appendChild(badge);
-            } catch (err) { /* 徽标失败不影响面板 */ }
-            document.body.appendChild(this.container);
+                const savedRecentFolders = GM_getValue(STORAGE_KEYS.recentFolders, []);
+                this.recentFolders = Array.isArray(savedRecentFolders) ? savedRecentFolders.filter(Boolean).map(String).slice(0, 5) : [];
+            } catch (err) {
+                this.recentFolders = [];
+            }
 
-            // 初始化时折叠
-            this.collapse();
-
-            Log.info('UI 面板已注入');
-        },
-
-        /**
-         * 注入面板样式（内联 style 标签）
-         */
-        _createStyles() {
-            const style = document.createElement('style');
-            style.textContent = `
-                /* ── 面板主容器：简洁毛玻璃 ── */
-                #eagle-scraper-panel {
-                    position: fixed;
-                    top: 80px;
-                    right: 12px;
-                    z-index: 99999;
-                    width: min(296px, calc(100vw - 24px));
-                    max-width: calc(100vw - 24px);
-                    min-width: 0;
-                    box-sizing: border-box;
-                    background: rgba(26, 28, 34, 0.68);
-                    border: 1px solid rgba(255, 255, 255, 0.12);
-                    border-radius: 14px;
-                    box-shadow:
-                        0 16px 44px rgba(4, 10, 20, 0.26),
-                        inset 0 1px 0 rgba(255, 255, 255, 0.08);
-                    backdrop-filter: blur(18px) saturate(140%);
-                    -webkit-backdrop-filter: blur(18px) saturate(140%);
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                    font-size: 13px;
-                    color: #edf1f7;
-                    transition:
-                        width 320ms cubic-bezier(0.16, 1, 0.3, 1),
-                        max-height 360ms cubic-bezier(0.16, 1, 0.3, 1),
-                        border-radius 260ms cubic-bezier(0.16, 1, 0.3, 1),
-                        transform 180ms ease,
-                        box-shadow 220ms ease,
-                        background 220ms ease;
-                    max-height: 720px;
-                    overflow: hidden;
-                    user-select: none;
-                }
-                #eagle-scraper-panel::before {
-                    content: "";
-                    position: absolute;
-                    inset: 0;
-                    border-radius: inherit;
-                    pointer-events: none;
-                    background:
-                        linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.00) 42%),
-                        radial-gradient(circle at top right, rgba(255,255,255,0.10), transparent 46%);
-                    opacity: 0.72;
-                }
-                /* ── 折叠状态：图标悬浮球 ── */
-                #eagle-scraper-panel.collapsed {
-                    width: 46px;
-                    height: 46px;
-                    min-height: 46px;
-                    max-height: 46px;
-                    border-radius: 50%;
-                    cursor: pointer;
-                    background: rgba(29, 32, 40, 0.78);
-                    border-color: rgba(255,255,255,0.14);
-                    box-shadow:
-                        0 12px 26px rgba(10, 14, 22, 0.28),
-                        inset 0 1px 0 rgba(255,255,255,0.08);
-                }
-                #eagle-scraper-panel.collapsed::after {
-                    content: "";
-                    position: absolute;
-                    inset: -6px;
-                    border-radius: 50%;
-                    border: 1px solid rgba(255,255,255,0.18);
-                    opacity: 0;
-                    transform: scale(0.88);
-                    transition:
-                        opacity 220ms ease,
-                        transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
-                    pointer-events: none;
-                }
-                #eagle-scraper-panel.collapsed:hover {
-                    transform: translateY(-2px) scale(1.035);
-                    box-shadow:
-                        0 18px 30px rgba(10, 14, 22, 0.34),
-                        inset 0 1px 0 rgba(255,255,255,0.1);
-                }
-                #eagle-scraper-panel.collapsed:hover::after {
-                    opacity: 0.95;
-                    transform: scale(1.05);
-                }
-                #eagle-scraper-panel.collapsed:active {
-                    transform: scale(0.98);
-                }
-                #eagle-scraper-panel.expanded {
-                    transform: translateY(0);
-                    height: auto;
-                    min-height: 0;
-                    max-height: 720px;
-                    border-radius: 14px;
-                    overflow: visible;
-                }
-                /*
-                 * 面板边界总护栏：目标站点可能给 button / div 注入全局 min-width，
-                 * 长文件夹名也会形成很大的固有宽度。所有结构层必须允许收缩，
-                 * 普通内容严格限制在面板内；帮助提示浮层挂在 body 上单独定位。
-                 */
-                #eagle-scraper-panel .esp-header,
-                #eagle-scraper-panel .esp-header > div,
-                #eagle-scraper-panel .esp-body,
-                #eagle-scraper-panel .esp-body-content,
-                #eagle-scraper-panel .esp-progress,
-                #eagle-scraper-panel .esp-mode-card,
-                #eagle-scraper-panel .esp-mode-grid,
-                #eagle-scraper-panel .esp-config-section,
-                #eagle-scraper-panel .esp-folder,
-                #eagle-scraper-panel .esp-folder-select-wrap,
-                #eagle-scraper-panel .esp-tag-select-wrap,
-                #eagle-scraper-panel .esp-local-folder,
-                #eagle-scraper-panel .esp-local-folder-row,
-                #eagle-scraper-panel .esp-switch-row,
-                #eagle-scraper-panel .esp-btn-row {
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    box-sizing: border-box;
-                }
-                /* 站点全局 button 规则不得把面板内部控件重新撑宽。 */
-                #eagle-scraper-panel button {
-                    max-width: 100%;
-                    min-width: 0 !important;
-                    box-sizing: border-box;
-                }
-                #eagle-scraper-panel.expanded:hover {
-                    box-shadow:
-                        0 18px 46px rgba(4, 10, 20, 0.30),
-                        inset 0 1px 0 rgba(255, 255, 255, 0.09);
-                }
-                /* ── 面板头部 ── */
-                .esp-header {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    padding: 12px 14px 10px 14px;
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.00)),
-                        rgba(255,255,255,0.02);
-                    cursor: pointer;
-                    font-weight: 600;
-                    font-size: 14px;
-                    border-bottom: 1px solid rgba(255,255,255,0.06);
-                    opacity: 1;
-                    transform: translateY(0);
-                    max-height: 60px;
-                    overflow: hidden;
-                    transition:
-                        opacity 220ms ease,
-                        transform 320ms cubic-bezier(0.16, 1, 0.3, 1),
-                        max-height 320ms cubic-bezier(0.16, 1, 0.3, 1),
-                        padding 320ms cubic-bezier(0.16, 1, 0.3, 1);
-                }
-                .esp-header-title {
-                    display: flex;
-                    align-items: center;
-                    gap: 10px;
-                    min-width: 0;
-                    max-width: 100%;
-                    overflow: hidden;
-                }
-                .esp-header-title > span:last-child {
-                    min-width: 0;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                .esp-header-icon {
-                    width: 20px;
-                    height: 20px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #f6f8fb;
-                    opacity: 0.95;
-                    transform-origin: center;
-                    transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
-                }
-                #eagle-scraper-panel.expanded .esp-header:hover .esp-header-icon {
-                    transform: scale(1.06);
-                }
-                .esp-header-site {
-                    font-size: 11px;
-                    opacity: 0.72;
-                    font-weight: 400;
-                    margin-top: 2px;
-                    min-width: 0;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                .esp-header-site-row {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 10px;
-                    min-width: 0;
-                }
-                .esp-connection-status {
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 5px;
-                    flex: 0 0 auto;
-                    font-size: 10px;
-                    line-height: 1;
-                    color: rgba(235,240,248,0.62);
-                    white-space: nowrap;
-                }
-                .esp-connection-dot {
-                    width: 6px;
-                    height: 6px;
-                    border-radius: 50%;
-                    background: #f0b24b;
-                    box-shadow: 0 0 0 3px rgba(240,178,75,0.12);
-                }
-                .esp-connection-status.is-connected {
-                    color: rgba(190,244,204,0.88);
-                }
-                .esp-connection-status.is-connected .esp-connection-dot {
-                    background: #63d889;
-                    box-shadow: 0 0 0 3px rgba(99,216,137,0.14);
-                }
-                .esp-connection-status.is-disconnected {
-                    color: rgba(255,190,190,0.88);
-                }
-                .esp-connection-status.is-disconnected .esp-connection-dot {
-                    background: #ee6b6b;
-                    box-shadow: 0 0 0 3px rgba(238,107,107,0.14);
-                }
-                .esp-toggle {
-                    font-size: 12px;
-                    opacity: 0.62;
-                    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease;
-                }
-                #eagle-scraper-panel.expanded .esp-toggle {
-                    transform: rotate(180deg);
-                }
-                /* ── 面板主体 ── */
-                .esp-body {
-                    padding: 12px 14px 14px 14px;
-                    display: grid;
-                    grid-template-rows: 1fr;
-                    opacity: 1;
-                    transform: translateY(0);
-                    transition:
-                        grid-template-rows 360ms cubic-bezier(0.16, 1, 0.3, 1),
-                        opacity 220ms ease,
-                        transform 360ms cubic-bezier(0.16, 1, 0.3, 1),
-                        padding 360ms cubic-bezier(0.16, 1, 0.3, 1);
-                }
-                .esp-body-content {
-                    min-height: 0;
-                    max-width: 100%;
-                    overflow-x: hidden;
-                    overflow-y: visible;
-                }
-                /* ── 进度区域 ── */
-                .esp-progress {
-                    margin-bottom: 12px;
-                    display: none;
-                }
-                .esp-progress.visible {
-                    display: block;
-                }
-                .esp-progress-text {
-                    font-size: 11px;
-                    color: rgba(235, 240, 248, 0.72);
-                    margin-bottom: 6px;
-                    max-width: 100%;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                .esp-progress-bar-outer {
-                    height: 6px;
-                    background: rgba(255,255,255,0.08);
-                    border-radius: 999px;
-                    overflow: hidden;
-                }
-                .esp-progress-bar-inner {
-                    height: 100%;
-                    background: linear-gradient(90deg, rgba(228,233,240,0.78), rgba(255,255,255,0.96));
-                    border-radius: 999px;
-                    transition: width 0.3s ease;
-                    width: 0%;
-                }
-                /* ── 动作模式切换 ── */
-                .esp-mode-card {
-                    margin-bottom: 12px;
-                    padding: 0;
-                    background: transparent;
-                    border: 0;
-                }
-                .esp-mode-grid {
-                    display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 8px;
-                }
-                .esp-mode-btn {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-height: 42px;
-                    padding: 8px 11px;
-                    border-radius: 9px;
-                    border: 1px solid rgba(255,255,255,0.10);
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03)),
-                        rgba(255,255,255,0.04);
-                    color: rgba(236, 241, 247, 0.92);
-                    cursor: pointer;
-                    text-align: left;
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    overflow: hidden;
-                    transition:
-                        transform 140ms ease,
-                        border-color 180ms ease,
-                        background 180ms ease,
-                        box-shadow 180ms ease;
-                }
-                .esp-mode-btn:hover {
-                    transform: translateY(-1px);
-                    border-color: rgba(255,255,255,0.18);
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.05)),
-                        rgba(255,255,255,0.06);
-                }
-                .esp-mode-btn:active {
-                    transform: scale(0.992);
-                }
-                .esp-mode-btn.active {
-                    border-color: rgba(255,255,255,0.22);
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.07)),
-                        rgba(255,255,255,0.08);
-                    box-shadow:
-                        inset 0 1px 0 rgba(255,255,255,0.08),
-                        0 10px 20px rgba(8, 14, 24, 0.12);
-                }
-                .esp-mode-btn:disabled {
-                    opacity: 0.56;
-                    cursor: not-allowed;
-                    transform: none;
-                }
-                .esp-mode-btn {
-                    text-align: center;
-                }
-                .esp-mode-btn.active {
-                    border: 1px solid rgba(171, 214, 255, 0.88);
-                    background: rgba(146, 186, 224, 0.16);
-                    box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 0 1px rgba(138,196,245,0.16);
-                    transform: none;
-                }
-                .esp-mode-btn:not(.active) {
-                    opacity: 0.72;
-                }
-                .esp-mode-btn-title {
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #f6f8fb;
-                }
-                .esp-mode-btn-title {
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 5px;
-                    max-width: 100%;
-                    min-width: 0;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                /* ── 配置块 ── */
-                .esp-folder {
-                    margin-bottom: 10px;
-                }
-                .esp-local-folder {
-                    margin-bottom: 10px;
-                }
-                .esp-local-folder-row {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-                .esp-local-folder-trigger {
-                    flex: 1;
-                    min-width: 0;
-                    max-width: 100%;
-                    height: 40px;
-                    padding: 0 12px;
-                    border: 1px solid rgba(255,255,255,0.10);
-                    border-radius: 10px;
-                    background: rgba(255,255,255,0.06);
-                    color: rgba(244,247,251,0.92);
-                    font-size: 12px;
-                    text-align: left;
-                    cursor: pointer;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                    transition: border-color 160ms ease, background 160ms ease;
-                }
-                .esp-local-folder-trigger:hover {
-                    border-color: rgba(255,255,255,0.22);
-                    background: rgba(255,255,255,0.09);
-                }
-                .esp-local-folder-hint {
-                    margin-top: 5px;
-                    color: rgba(235,240,248,0.42);
-                    font-size: 10px;
-                    line-height: 1.35;
-                    max-width: 100%;
-                    overflow-wrap: anywhere;
-                }
-                .esp-config-section.disabled {
-                    opacity: 0.52;
-                }
-                .esp-config-section.disabled .esp-folder-trigger,
-                .esp-config-section.disabled .esp-textarea,
-                .esp-config-section.disabled .esp-checkbox {
-                    pointer-events: none;
-                }
-                .esp-label {
-                    font-size: 11px;
-                    color: rgba(235, 240, 248, 0.62);
-                    margin-bottom: 6px;
-                    max-width: 100%;
-                    overflow-wrap: anywhere;
-                }
-                .esp-folder-select-wrap {
-                    position: relative;
-                }
-                .esp-native-select {
-                    position: absolute;
-                    width: 1px;
-                    height: 1px;
-                    opacity: 0;
-                    pointer-events: none;
-                    overflow: hidden;
-                }
-                .esp-folder-trigger {
-                    width: 100%;
-                    max-width: 100% !important;
-                    min-width: 0 !important;
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 10px;
-                    padding: 9px 12px;
-                    min-height: 40px;
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04)),
-                        rgba(255,255,255,0.06);
-                    border: 1px solid rgba(255,255,255,0.10);
-                    border-radius: 10px;
-                    color: #edf1f7;
-                    font-size: 12px;
-                    outline: none;
-                    cursor: pointer;
-                    box-sizing: border-box;
-                    transition:
-                        border-color 180ms ease,
-                        background 180ms ease,
-                        box-shadow 180ms ease,
-                        transform 140ms ease;
-                }
-                .esp-folder-trigger:hover {
-                    border-color: rgba(255,255,255,0.18);
-                    background:
-                        linear-gradient(180deg, rgba(255,255,255,0.11), rgba(255,255,255,0.05)),
-                        rgba(255,255,255,0.08);
-                }
-                .esp-folder-trigger:active {
-                    transform: scale(0.992);
-                }
-                .esp-folder-trigger:focus-visible {
-                    border-color: rgba(255,255,255,0.22);
-                    box-shadow: 0 0 0 3px rgba(255,255,255,0.08);
-                }
-                .esp-folder-trigger-text {
-                    flex: 1 1 auto;
-                    min-width: 0;
-                    max-width: 100%;
-                    display: block;
-                    text-align: left;
-                    line-height: 1.35;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    color: rgba(237,241,247,0.94);
-                }
-                .esp-folder-trigger-icon {
-                    width: 16px;
-                    height: 16px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: rgba(237,241,247,0.72);
-                    flex-shrink: 0;
-                    transition: transform 180ms ease, color 180ms ease;
-                }
-                .esp-folder-select-wrap.open .esp-folder-trigger-icon {
-                    transform: rotate(180deg);
-                    color: rgba(248,250,253,0.92);
-                }
-                /*
-                 * 选择器是独立浮层：主面板和触发按钮继续严格收缩，
-                 * 但目录/标签列表保持 420px 的阅读宽度，在面板外悬浮显示。
-                 * 菜单节点由 JS 挂到 body 顶层（面板的 overflow:hidden 会裁剪子元素，
-                 * backdrop-filter/transform 还会劫持 position:fixed 的包含块，
-                 * 留在面板内部无论怎么定位都出不去），因此这里直接用 fixed + 视口坐标。
-                 * 仍用视口宽度做上限，保证小窗口下不会跑出浏览器边界。
-                 */
-                .esp-folder-menu {
-                    position: fixed;
-                    display: none;
-                    width: min(420px, calc(100vw - 20px));
-                    max-width: none;
-                    min-width: 0;
-                    height: min(540px, calc(100vh - 32px));
-                    padding: 8px;
-                    box-sizing: border-box;
-                    overflow: hidden;
-                    border-radius: 12px;
-                    background: rgba(20, 23, 30, 0.98);
-                    border: 1px solid rgba(255,255,255,0.12);
-                    box-shadow:
-                        0 18px 40px rgba(5, 10, 18, 0.32),
-                        inset 0 1px 0 rgba(255,255,255,0.06);
-                    backdrop-filter: blur(18px) saturate(140%);
-                    -webkit-backdrop-filter: blur(18px) saturate(140%);
-                    z-index: 1000000;
-                }
-                .esp-folder-menu.open {
-                    display: flex;
-                    flex-direction: column;
-                    animation: espFolderMenuIn 160ms cubic-bezier(0.16, 1, 0.3, 1);
-                }
-                .esp-picker-head {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    position: sticky;
-                    top: 0;
-                    z-index: 2;
-                    padding-bottom: 8px;
-                    margin-bottom: 4px;
-                    background: linear-gradient(180deg, rgba(20,23,30,0.98), rgba(20,23,30,0.88));
-                    backdrop-filter: blur(12px);
-                    -webkit-backdrop-filter: blur(12px);
-                }
-                .esp-picker-mode {
-                    flex: 0 0 auto;
-                    color: rgba(235,240,248,0.46);
-                    font-size: 10px;
-                    white-space: nowrap;
-                }
-                .esp-picker-refresh {
-                    flex: 0 0 auto;
-                    padding: 3px 6px;
-                    border: 0;
-                    border-radius: 5px;
-                    background: transparent;
-                    color: rgba(235,240,248,0.48);
-                    font-size: 10px;
-                    cursor: pointer;
-                }
-                .esp-picker-refresh:hover { color: rgba(248,250,253,0.92); background: rgba(255,255,255,0.08); }
-                .esp-folder-recent,
-                .esp-tag-recent {
-                    display: none;
-                    gap: 6px;
-                    overflow-x: auto;
-                    padding: 2px 0 8px;
-                    scrollbar-width: none;
-                }
-                .esp-folder-recent.has-items,
-                .esp-tag-recent.has-items {
-                    display: flex;
-                }
-                .esp-folder-recent::-webkit-scrollbar,
-                .esp-tag-recent::-webkit-scrollbar {
-                    display: none;
-                }
-                .esp-recent-chip {
-                    flex: 0 0 auto;
-                    max-width: 170px;
-                    min-width: 0;
-                    padding: 5px 8px;
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 8px;
-                    background: rgba(255,255,255,0.05);
-                    color: rgba(237,241,247,0.78);
-                    font-size: 10px;
-                    cursor: pointer;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-                .esp-recent-chip:hover {
-                    background: rgba(255,255,255,0.10);
-                    color: #fff;
-                }
-                .esp-picker-footer {
-                    display: flex;
-                    justify-content: space-between;
-                    gap: 8px;
-                    padding-top: 8px;
-                    margin-top: 6px;
-                    border-top: 1px solid rgba(255,255,255,0.08);
-                    color: rgba(235,240,248,0.42);
-                    font-size: 10px;
-                    flex: 0 0 auto;
-                    min-height: 26px;
-                    align-items: center;
-                    max-width: 100%;
-                    min-width: 0;
-                    overflow: hidden;
-                }
-                .esp-picker-done {
-                    margin-left: auto;
-                    padding: 4px 9px;
-                    border: 1px solid rgba(255,255,255,0.16);
-                    border-radius: 7px;
-                    background: rgba(255,255,255,0.08);
-                    color: rgba(248,250,253,0.88);
-                    font-size: 10px;
-                    cursor: pointer;
-                }
-                .esp-picker-done:hover {
-                    background: rgba(255,255,255,0.14);
-                    border-color: rgba(255,255,255,0.24);
-                }
-                .esp-folder-search-wrap {
-                    position: sticky;
-                    top: 0;
-                    z-index: 1;
-                    padding-bottom: 8px;
-                    margin-bottom: 4px;
-                    background: linear-gradient(180deg, rgba(20,23,30,0.99), rgba(20,23,30,0.96));
-                    backdrop-filter: blur(12px);
-                    -webkit-backdrop-filter: blur(12px);
-                }
-                .esp-folder-search {
-                    flex: 1 1 auto;
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    height: 36px;
-                    padding: 0 12px;
-                    border-radius: 10px;
-                    border: 1px solid rgba(255,255,255,0.10);
-                    background: rgba(255,255,255,0.06);
-                    color: rgba(244,247,251,0.96);
-                    font-size: 12px;
-                    box-sizing: border-box;
-                    outline: none;
-                    transition: border-color 160ms ease, background 160ms ease;
-                }
-                .esp-folder-search::placeholder {
-                    color: rgba(235,240,248,0.40);
-                }
-                .esp-folder-search:focus {
-                    border-color: rgba(255,255,255,0.18);
-                    background: rgba(255,255,255,0.08);
-                }
-                .esp-folder-tree {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 1px;
-                    flex: 1 1 auto;
-                    width: 100%;
-                    max-width: 100%;
-                    min-height: 0;
-                    min-width: 0;
-                    overflow-y: auto;
-                    scrollbar-width: thin;
-                    padding: 2px 2px 8px 0;
-                }
-                .esp-folder-tree::-webkit-scrollbar { width: 7px; }
-                .esp-folder-tree::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 999px; }
-                .esp-folder-empty {
-                    padding: 10px 8px 8px;
-                    color: rgba(235,240,248,0.54);
-                    font-size: 11px;
-                    text-align: center;
-                }
-                .esp-folder-group {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 4px;
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                }
-                .esp-folder-menu::-webkit-scrollbar {
-                    width: 8px;
-                }
-                .esp-folder-menu::-webkit-scrollbar-thumb {
-                    background: rgba(255,255,255,0.16);
-                    border-radius: 999px;
-                }
-                .esp-folder-option {
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    display: flex;
-                    align-items: center;
-                    justify-content: flex-start;
-                    gap: 7px;
-                    min-height: 30px;
-                    padding: 4px 8px;
-                    border: none;
-                    border-radius: 7px;
-                    background: transparent;
-                    color: rgba(237,241,247,0.88);
-                    font-size: 12px;
-                    text-align: left;
-                    cursor: pointer;
-                    transition: background 160ms ease, color 160ms ease, transform 140ms ease;
-                    box-sizing: border-box;
-                }
-                .esp-folder-option:hover {
-                    background: rgba(255,255,255,0.08);
-                    color: rgba(248,250,253,0.98);
-                }
-                .esp-folder-option:active {
-                    transform: scale(0.992);
-                }
-                .esp-folder-option.active {
-                    background: rgba(255,255,255,0.10);
-                    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-                    color: #ffffff;
-                }
-                .esp-folder-option-label {
-                    flex: 1;
-                    order: 3;
-                    min-width: 0;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-                .esp-folder-option-checkbox {
-                    width: 18px;
-                    height: 18px;
-                    flex: 0 0 18px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 0;
-                    border: 1px solid rgba(235,240,248,0.42);
-                    border-radius: 4px;
-                    background: transparent;
-                    color: rgba(248,250,253,0.96);
-                    cursor: pointer;
-                    order: 1;
-                }
-                .esp-folder-option-checkbox:hover,
-                .esp-folder-option-checkbox.checked {
-                    border-color: rgba(177,215,248,0.84);
-                    background: rgba(177,215,248,0.22);
-                }
-                .esp-folder-option-checkbox svg {
-                    width: 14px;
-                    height: 14px;
-                }
-                .esp-folder-option-icon {
-                    width: 18px;
-                    height: 18px;
-                    flex: 0 0 18px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: rgba(237,241,247,0.62);
-                    order: 2;
-                }
-                .esp-folder-option-icon svg {
-                    width: 18px;
-                    height: 18px;
-                }
-                .esp-folder-option-toggle {
-                    width: 28px;
-                    height: 28px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    margin-left: auto;
-                    padding: 0;
-                    border: 0;
-                    border-radius: 6px;
-                    background: transparent;
-                    color: rgba(237,241,247,0.50);
-                    flex-shrink: 0;
-                    cursor: pointer;
-                    order: 4;
-                    transition: transform 160ms ease, color 160ms ease;
-                }
-                .esp-folder-option-toggle:hover {
-                    background: rgba(255,255,255,0.08);
-                    color: rgba(248,250,253,0.92);
-                }
-                .esp-folder-option-toggle.expanded {
-                    transform: rotate(90deg);
-                    color: rgba(248,250,253,0.82);
-                }
-                .esp-folder-option-spacer {
-                    width: 28px;
-                    height: 28px;
-                    margin-left: auto;
-                    flex-shrink: 0;
-                    order: 4;
-                }
-                .esp-tag-select-wrap {
-                    position: relative;
-                }
-                .esp-tag-trigger {
-                    width: 100%;
-                    max-width: 100% !important;
-                    min-width: 0 !important;
-                    min-height: 40px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 10px;
-                    padding: 9px 12px;
-                    border: 1px solid rgba(255,255,255,0.10);
-                    border-radius: 10px;
-                    background: rgba(255,255,255,0.06);
-                    color: rgba(237,241,247,0.92);
-                    font-size: 12px;
-                    text-align: left;
-                    cursor: pointer;
-                    box-sizing: border-box;
-                    overflow: hidden;
-                    transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
-                }
-                .esp-tag-trigger:hover,
-                .esp-tag-select-wrap.open .esp-tag-trigger {
-                    border-color: rgba(255,255,255,0.20);
-                    background: rgba(255,255,255,0.09);
-                }
-                .esp-tag-trigger-meta {
-                    flex: 0 0 auto;
-                    max-width: 42%;
-                    color: rgba(235,240,248,0.48);
-                    font-size: 10px;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-                #esp-tag-trigger-text {
-                    flex: 1 1 auto;
-                    min-width: 0;
-                    max-width: 100%;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                .esp-tag-menu {
-                    position: fixed;
-                    z-index: 1000000;
-                    display: none;
-                    width: min(420px, calc(100vw - 20px));
-                    max-width: none;
-                    min-width: 0;
-                    box-sizing: border-box;
-                    padding: 7px;
-                    height: min(600px, calc(100vh - 24px));
-                    overflow: hidden;
-                    border: 1px solid rgba(255,255,255,0.12);
-                    border-radius: 12px;
-                    background: rgba(20,23,30,0.98);
-                    box-shadow: 0 18px 40px rgba(5,10,18,0.34), inset 0 1px 0 rgba(255,255,255,0.06);
-                    backdrop-filter: blur(18px) saturate(140%);
-                    -webkit-backdrop-filter: blur(18px) saturate(140%);
-                }
-                .esp-tag-menu.open {
-                    display: flex;
-                    flex-direction: column;
-                    animation: espFolderMenuIn 160ms cubic-bezier(0.16,1,0.3,1);
-                }
-                .esp-tag-search {
-                    flex: 1;
-                    min-width: 0;
-                    height: 36px;
-                    padding: 0 12px;
-                    appearance: none !important;
-                    -webkit-appearance: none !important;
-                    border: 1px solid rgba(255,255,255,0.10) !important;
-                    border-radius: 10px !important;
-                    background: rgba(255,255,255,0.06) !important;
-                    color: rgba(244,247,251,0.96) !important;
-                    -webkit-text-fill-color: rgba(244,247,251,0.96) !important;
-                    caret-color: rgba(244,247,251,0.96) !important;
-                    opacity: 1 !important;
-                    visibility: visible !important;
-                    text-shadow: none !important;
-                    font-size: 12px;
-                    font-family: inherit;
-                    outline: none;
-                    box-sizing: border-box;
-                    box-shadow: none !important;
-                    transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
-                }
-                /* 标签搜索框在菜单浮层内，菜单挂在 body 顶层，选择器随之从面板前缀改为浮层前缀 */
-                body > .esp-tag-menu .esp-tag-search:hover {
-                    border-color: rgba(255,255,255,0.24) !important;
-                    background: rgba(255,255,255,0.075) !important;
-                }
-                body > .esp-tag-menu .esp-tag-search:focus,
-                body > .esp-tag-menu .esp-tag-search:focus-visible {
-                    border-color: rgba(171,214,255,0.82) !important;
-                    background: rgba(255,255,255,0.09) !important;
-                    color: rgba(248,250,253,0.98) !important;
-                    -webkit-text-fill-color: rgba(248,250,253,0.98) !important;
-                    caret-color: rgba(248,250,253,0.98) !important;
-                    outline: none !important;
-                    box-shadow: 0 0 0 3px rgba(138,196,245,0.16) !important;
-                }
-                body > .esp-tag-menu .esp-tag-search::placeholder {
-                    color: rgba(235,240,248,0.42) !important;
-                    -webkit-text-fill-color: rgba(235,240,248,0.42) !important;
-                    opacity: 1 !important;
-                }
-                .esp-selected-tags {
-                    display: none;
-                    flex-wrap: wrap;
-                    align-items: center;
-                    gap: 5px;
-                    padding: 4px 0 7px;
-                    border-bottom: 1px solid rgba(255,255,255,0.08);
-                }
-                .esp-selected-tags.has-items { display: flex; }
-                .esp-selected-tag {
-                    display: inline-flex;
-                    align-items: center;
-                    min-width: 0;
-                    max-width: 150px;
-                    height: 24px;
-                    padding: 0 5px 0 8px;
-                    border: 1px solid rgba(177, 215, 248, 0.32);
-                    border-radius: 999px;
-                    background: rgba(139, 177, 211, 0.16);
-                    color: rgba(240,246,252,0.92);
-                    font-size: 11px;
-                }
-                .esp-selected-tag-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-                .esp-selected-tag-remove {
-                    width: 18px;
-                    height: 18px;
-                    margin-left: 3px;
-                    padding: 0;
-                    border: 0;
-                    border-radius: 50%;
-                    background: transparent;
-                    color: rgba(240,246,252,0.64);
-                    font-size: 14px;
-                    line-height: 18px;
-                    cursor: pointer;
-                }
-                .esp-selected-tag-remove:hover { background: rgba(255,255,255,0.14); color: #fff; }
-                .esp-selected-tags-clear {
-                    margin-left: auto;
-                    padding: 3px 5px;
-                    border: 0;
-                    border-radius: 5px;
-                    background: transparent;
-                    color: rgba(235,240,248,0.58);
-                    font-size: 10px;
-                    cursor: pointer;
-                }
-                .esp-selected-tags-clear:hover { background: rgba(255,255,255,0.08); color: rgba(248,250,253,0.94); }
-                .esp-tag-list {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 0;
-                    flex: 1 1 auto;
-                    min-height: 0;
-                    overflow-y: auto;
-                    scrollbar-width: thin;
-                    padding: 1px 2px 4px 0;
-                }
-                .esp-tag-group {
-                    margin: 0 0 4px;
-                }
-                .esp-tag-group-title {
-                    width: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    min-height: 26px;
-                    padding: 3px 3px;
-                    border: 0;
-                    border-bottom: 1px solid rgba(255,255,255,0.08);
-                    background: transparent;
-                    color: rgba(248,250,253,0.78);
-                    font-size: 11px;
-                    font-weight: 600;
-                    text-align: left;
-                    cursor: pointer;
-                }
-                .esp-tag-group-title:hover { color: #fff; }
-                .esp-tag-group-title-meta { color: rgba(235,240,248,0.46); font-size: 10px; font-weight: 400; }
-                .esp-tag-group-title-chevron { transition: transform 160ms ease; }
-                .esp-tag-group-title.collapsed .esp-tag-group-title-chevron { transform: rotate(-90deg); }
-                .esp-tag-group-items {
-                    display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 0 4px;
-                    padding-top: 2px;
-                }
-                .esp-tag-group-items.single-column { grid-template-columns: minmax(0, 1fr); }
-                .esp-tag-option {
-                    width: 100%;
-                    min-height: 26px;
-                    display: flex;
-                    align-items: center;
-                    gap: 5px;
-                    padding: 3px 5px;
-                    border: 0;
-                    border-radius: 6px;
-                    background: transparent;
-                    color: rgba(237,241,247,0.84);
-                    font-size: 11px;
-                    text-align: left;
-                    cursor: pointer;
-                }
-                .esp-tag-option:hover { background: rgba(255,255,255,0.08); color: #fff; }
-                .esp-tag-option.active { background: rgba(255,255,255,0.10); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
-                .esp-tag-option-check { width: 10px; flex: 0 0 10px; color: rgba(248,250,253,0.90); font-size: 10px; text-align: center; }
-                .esp-tag-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-                .esp-tag-option-count { margin-left: 3px; color: rgba(235,240,248,0.46); font-size: 9px; }
-                .esp-tag-manual { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); }
-                .esp-tag-manual .esp-textarea { min-height: 30px; max-height: 30px; padding: 5px 7px; line-height: 18px; resize: none; }
-                /* Eagle 官方标签弹层使用紧凑两列；最近标签也沿用相同密度，避免横向大块胶囊占位。 */
-                .esp-tag-recent.has-items {
-                    display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 0 4px;
-                    padding: 1px 0 4px;
-                    overflow: visible;
-                }
-                .esp-tag-recent .esp-recent-chip {
-                    width: 100%;
-                    max-width: none;
-                    min-height: 26px;
-                    padding: 3px 5px;
-                    border-color: transparent;
-                    border-radius: 6px;
-                    background: transparent;
-                    font-size: 11px;
-                    text-align: left;
-                }
-                .esp-tag-empty { padding: 12px 8px; color: rgba(235,240,248,0.48); font-size: 11px; text-align: center; }
-                @keyframes espFolderMenuIn {
-                    from {
-                        opacity: 0;
-                        transform: translateY(-4px) scale(0.985);
-                    }
-                    to {
-                        opacity: 1;
-                        transform: translateY(0) scale(1);
-                    }
-                }
-                .esp-input,
-                .esp-textarea {
-                    width: 100%;
-                    padding: 8px 10px;
-                    background: rgba(255,255,255,0.06);
-                    border: 1px solid rgba(255,255,255,0.10);
-                    border-radius: 10px;
-                    color: #edf1f7;
-                    font-size: 12px;
-                    outline: none;
-                    transition: border-color 180ms ease, background 180ms ease;
-                    box-sizing: border-box;
-                }
-                .esp-input::placeholder,
-                .esp-textarea::placeholder {
-                    color: rgba(235,240,248,0.38);
-                }
-                .esp-input:focus,
-                .esp-textarea:focus {
-                    border-color: rgba(255,255,255,0.22);
-                    background: rgba(255,255,255,0.08);
-                }
-                .esp-textarea {
-                    min-height: 62px;
-                    resize: vertical;
-                    line-height: 1.45;
-                }
-                .esp-switch-row {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 10px;
-                    margin: 10px 0 12px;
-                    padding: 10px 12px;
-                    border-radius: 10px;
-                    background: rgba(255,255,255,0.04);
-                    border: 1px solid rgba(255,255,255,0.06);
-                }
-                .esp-switch-label {
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 5px;
-                    flex: 1 1 auto;
-                    min-width: 0;
-                    max-width: 100%;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                    font-size: 12px;
-                    color: rgba(237,241,247,0.92);
-                    line-height: 14px;
-                }
-                .esp-help {
-                    position: relative;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    width: 14px;
-                    height: 14px;
-                    flex: 0 0 14px;
-                    border: 1px solid rgba(235,240,248,0.42);
-                    border-radius: 50%;
-                    color: rgba(241,245,250,0.78);
-                    font-size: 10px;
-                    font-weight: 700;
-                    line-height: 14px;
-                    text-align: center;
-                    padding: 0;
-                    box-sizing: border-box;
-                    vertical-align: middle;
-                    cursor: help;
-                    user-select: none;
-                    outline: none;
-                }
-                .esp-help::after {
-                    content: none;
-                }
-                .esp-tooltip {
-                    position: fixed;
-                    z-index: 1000000;
-                    box-sizing: border-box;
-                    max-width: min(232px, calc(100vw - 24px));
-                    padding: 7px 9px;
-                    border: 1px solid rgba(255,255,255,0.14);
-                    border-radius: 8px;
-                    background: rgba(18,21,28,0.97);
-                    box-shadow: 0 10px 24px rgba(3,8,16,0.30);
-                    color: rgba(246,248,252,0.94);
-                    font-size: 11px;
-                    font-weight: 400;
-                    line-height: 1.45;
-                    white-space: normal;
-                    pointer-events: none;
-                    opacity: 0;
-                    transform: translateY(-3px);
-                    transition: opacity 140ms ease, transform 160ms ease;
-                }
-                .esp-tooltip.visible {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-                .esp-label {
-                    display: flex;
-                    align-items: center;
-                    gap: 5px;
-                    max-width: 100%;
-                    min-width: 0;
-                    overflow-wrap: anywhere;
-                }
-                .esp-checkbox {
-                    width: 16px;
-                    height: 16px;
-                    flex: 0 0 16px;
-                    accent-color: #dce4f0;
-                }
-                /* ── 按钮 ── */
-                .esp-btn-row {
-                    display: flex;
-                    gap: 6px;
-                    margin-bottom: 8px;
-                    overflow: hidden;
-                }
-                .esp-btn {
-                    flex: 1;
-                    width: auto;
-                    max-width: 100%;
-                    min-width: 0;
-                    position: relative;
-                    overflow: hidden;
-                    padding: 9px 12px;
-                    border: 1px solid transparent;
-                    border-radius: 10px;
-                    font-size: 12px;
-                    font-weight: 500;
-                    cursor: pointer;
-                    transition:
-                        transform 140ms ease,
-                        box-shadow 180ms ease,
-                        background 180ms ease,
-                        border-color 180ms ease;
-                    color: #f5f7fb;
-                    box-shadow:
-                        inset 0 1px 0 rgba(255,255,255,0.10),
-                        0 10px 24px rgba(6, 12, 22, 0.14);
-                }
-                .esp-btn::after {
-                    content: "";
-                    position: absolute;
-                    inset: 0;
-                    pointer-events: none;
-                    background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
-                    opacity: 0;
-                    transition: opacity 180ms ease;
-                }
-                .esp-btn:hover {
-                    transform: translateY(-1px);
-                    box-shadow: 0 8px 18px rgba(10,14,22,0.18);
-                }
-                .esp-btn:hover::after {
-                    opacity: 1;
-                }
-                .esp-btn:active {
-                    transform: translateY(1px) scale(0.978);
-                }
-                .esp-btn:disabled {
-                    opacity: 0.4;
-                    cursor: not-allowed;
-                    transform: none;
-                    box-shadow: none;
-                }
-                .esp-btn-primary {
-                    background: rgba(255,255,255,0.14);
-                    border-color: rgba(255,255,255,0.16);
-                }
-                .esp-btn-secondary {
-                    background: rgba(255,255,255,0.06);
-                    border-color: rgba(255,255,255,0.10);
-                }
-                .esp-btn-danger {
-                    background: rgba(163, 52, 52, 0.42);
-                    border-color: rgba(255,255,255,0.08);
-                }
-                .esp-btn-full {
-                    width: 100%;
-                    margin-bottom: 8px;
-                }
-                .esp-btn-start {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    text-align: center;
-                    isolation: isolate;
-                    color: #ffffff;
-                    border-color: rgba(177, 215, 248, 0.62);
-                    background: rgba(118, 151, 183, 0.22);
-                    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 0 0 1px rgba(167, 211, 246, 0.10);
-                }
-                .esp-btn-start > .esp-btn-label {
-                    position: relative;
-                    z-index: 2;
-                    width: 100%;
-                    max-width: 100%;
-                    min-width: 0;
-                    left: auto;
-                    right: 0;
-                    box-sizing: border-box;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                }
-                .esp-btn-start:hover,
-                .esp-btn-start:focus-visible {
-                    border-color: rgba(205, 231, 255, 0.92);
-                    background: rgba(139, 177, 211, 0.28);
-                    box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 0 0 1px rgba(181, 220, 255, 0.22);
-                }
-                /* ── 状态 ── */
-                .esp-status {
-                    display: none;
-                    font-size: 11px;
-                    color: rgba(235,240,248,0.58);
-                    text-align: center;
-                    margin-top: 8px;
-                    line-height: 1.45;
-                    max-width: 100%;
-                    overflow-wrap: anywhere;
-                    word-break: break-word;
-                }
-                .esp-status.error {
-                    color: #ffb4b4;
-                }
-                .esp-status.success {
-                    color: #b7f0c8;
-                }
-                /* ── 折叠时的图标按钮 ── */
-                .esp-collapsed-icon {
-                    position: absolute;
-                    inset: 0;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    box-sizing: border-box;
-                    padding: 0;
-                    color: #f5f7fb;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                    opacity: 0;
-                    transform: scale(0.88);
-                    pointer-events: none;
-                    will-change: opacity, transform;
-                    transition:
-                        opacity 180ms ease,
-                        transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
-                }
-                .esp-collapsed-icon svg,
-                .esp-header-icon svg {
-                    display: block;
-                    flex: 0 0 auto;
-                    transition:
-                        transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
-                        filter 220ms ease,
-                        opacity 180ms ease;
-                }
-                .esp-collapsed-icon svg {
-                    /* Fab 等站点可能给全局 svg 设置 1px 尺寸；这里必须用固定尺寸覆盖，避免折叠按钮退化成横线。 */
-                    width: 26px !important;
-                    height: 26px !important;
-                    min-width: 26px !important;
-                    min-height: 26px !important;
-                    max-width: none !important;
-                    max-height: none !important;
-                    aspect-ratio: 1 / 1;
-                    /* 图形路径的实际包围盒略偏左上（下载箭头伸到右侧），
-                       用亚像素补偿让视觉重心与圆形容器中心重合。 */
-                    transform: translate(-0.25px, 0.8px);
-                    margin: 0;
-                }
-                #eagle-scraper-panel.collapsed .esp-collapsed-icon {
-                    opacity: 1;
-                    transform: scale(1);
-                    pointer-events: auto;
-                }
-                #eagle-scraper-panel.collapsed:hover .esp-collapsed-icon {
-                    transform: scale(1.08) rotate(-3deg);
-                }
-                #eagle-scraper-panel.collapsed:hover .esp-collapsed-icon svg {
-                    filter: drop-shadow(0 8px 14px rgba(0,0,0,0.18));
-                }
-                .esp-header:active .esp-header-icon svg {
-                    transform: scale(0.92) rotate(-6deg);
-                }
-                #eagle-scraper-panel.collapsed .esp-header {
-                    max-height: 0;
-                    padding-top: 0;
-                    padding-bottom: 0;
-                    border-bottom-color: transparent;
-                    opacity: 0;
-                    transform: translateY(-6px);
-                    pointer-events: none;
-                }
-                #eagle-scraper-panel.collapsed .esp-body {
-                    grid-template-rows: 0fr;
-                    padding-top: 0;
-                    padding-bottom: 0;
-                    opacity: 0;
-                    transform: translateY(8px);
-                    pointer-events: none;
-                }
-                @media (prefers-reduced-motion: reduce) {
-                    #eagle-scraper-panel,
-                    #eagle-scraper-panel::after,
-                    .esp-toggle,
-                    .esp-btn,
-                    .esp-btn::after,
-                    .esp-collapsed-icon,
-                    .esp-collapsed-icon svg,
-                    .esp-header-icon svg,
-                    .esp-header,
-                    .esp-body,
-                    .esp-progress-bar-inner {
-                        transition: none !important;
-                        animation: none !important;
-                    }
-                }
-            `;
-            document.head.appendChild(style);
-        },
-
-        /**
-         * 构建面板 DOM 结构
-         */
-        _buildPanel() {
+            // ── UI 外壳:家族共享库折叠面板(折叠=悬浮球,展开=完整面板) ──
             const siteName = this.siteInfo ? this.siteInfo.siteConfig.name : '未知站点';
             const pageType = this.siteInfo ? getPageTypeLabel(this.siteInfo.pageType) : '';
             const iconSvg = `
@@ -4203,192 +2785,109 @@
                     <path d="M15.9 13.9l2.5 2.5 2.5-2.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             `;
+            this.collPanel = EagleUI.createCollapsiblePanel({
+                title: 'Eagle 批量采集',
+                subtitle: `${siteName} · ${pageType}`,
+                icon: iconSvg,
+            });
+            this.container = this.collPanel.el;
+            // 标题行挂家族版本徽标 + Eagle 连接状态灯
+            this.collPanel.el.querySelector('.egc-coll-title').appendChild(EagleUI.versionBadge());
+            this.connStatus = EagleUI.createConnectionStatus('检测中');
+            this.collPanel.subRow.appendChild(this.connStatus.el);
 
-            this.container.innerHTML = `
-                <div class="esp-collapsed-icon">${iconSvg}</div>
-                <div class="esp-header">
-                    <div>
-                        <div class="esp-header-title">
-                            <span class="esp-header-icon">${iconSvg}</span>
-                            <span>Eagle 批量采集</span>
-                        </div>
-                        <div class="esp-header-site-row">
-                            <div class="esp-header-site">${siteName} · ${pageType}</div>
-                            <div class="esp-connection-status is-pending" id="esp-connection-status" aria-live="polite">
-                                <span class="esp-connection-dot" aria-hidden="true"></span>
-                                <span class="esp-connection-label">检测中</span>
-                            </div>
-                        </div>
-                    </div>
-                    <span class="esp-toggle">▲</span>
+            // ── 面板内容(功能性 id 与旧版一致,业务方法零改动) ──
+            this.collPanel.body.innerHTML = `
+                <div id="esp-progress" class="egc-progress-block">
+                    <div id="esp-progress-text" class="egc-progress-text">准备就绪</div>
+                    <div class="egc-progress-bar-outer"><div id="esp-progress-bar" class="egc-progress-bar-inner"></div></div>
                 </div>
-                <div class="esp-body">
-                    <div class="esp-body-content">
-                    <div class="esp-progress" id="esp-progress">
-                        <div class="esp-progress-text" id="esp-progress-text">准备就绪</div>
-                        <div class="esp-progress-bar-outer">
-                            <div class="esp-progress-bar-inner" id="esp-progress-bar"></div>
-                        </div>
-                    </div>
-                    <div class="esp-mode-card">
-                        <div class="esp-label">保存方式
-                            <span class="esp-help" tabindex="0" data-tooltip="选择将采集结果保存到 Eagle，或直接下载到浏览器默认目录。" aria-label="保存方式说明">?</span>
-                        </div>
-                        <div class="esp-mode-grid" id="esp-mode-group">
-                            <button class="esp-mode-btn" id="esp-mode-eagle" data-mode="eagle" type="button" aria-pressed="false">
-                                <span class="esp-mode-btn-title">保存到 Eagle
-                                    <span class="esp-help esp-help-inline" tabindex="0" data-tooltip="支持选择文件夹、添加标签，并可自动建立目录。" aria-label="保存到 Eagle 说明">?</span>
-                                </span>
-                            </button>
-                            <button class="esp-mode-btn" id="esp-mode-local" data-mode="local" type="button" aria-pressed="false">
-                                <span class="esp-mode-btn-title">本地下载
-                                    <span class="esp-help esp-help-inline" tabindex="0" data-tooltip="文件直接保存到浏览器默认下载目录，不写入 Eagle。" aria-label="本地下载说明">?</span>
-                                </span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="esp-folder esp-config-section" id="esp-eagle-folder-section">
-                        <div class="esp-label">目标文件夹（可多选）
-                            <span class="esp-help" tabindex="0" data-tooltip="可像 Eagle 官方采集器一样选择多个目标目录；Fab 自动建目录时会以首个目录作为父目录。" aria-label="目标文件夹说明">?</span>
-                        </div>
-                        <div class="esp-local-folder" id="esp-local-folder-section" style="display:none;">
-                            <div class="esp-local-folder-row">
-                                <button class="esp-local-folder-trigger" id="esp-local-folder-trigger" type="button">默认下载文件夹</button>
-                            </div>
-                            <div class="esp-local-folder-hint">点击上方按钮即可选择下载目录、系统文件夹或其他盘符；未选择时使用浏览器默认下载目录。</div>
-                        </div>
-                        <div class="esp-folder-select-wrap" id="esp-folder-select-wrap">
-                            <select class="esp-select esp-native-select" id="esp-folder-select" tabindex="-1" aria-hidden="true">
-                                <option value="">默认（根目录）</option>
-                            </select>
-                            <button class="esp-folder-trigger" id="esp-folder-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-                                <span class="esp-folder-trigger-text" id="esp-folder-trigger-text">默认（根目录）</span>
-                                <span class="esp-folder-trigger-icon" aria-hidden="true">
-                                    <svg viewBox="0 0 12 8" width="12" height="8" fill="none">
-                                        <path d="M1 1.5L6 6.5L11 1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                </span>
-                            </button>
-                            <div class="esp-folder-menu" id="esp-folder-menu" role="listbox" aria-label="Eagle 文件夹列表">
-                                <div class="esp-picker-head">
-                                    <input class="esp-folder-search" id="esp-folder-search" type="text" placeholder="搜索文件夹..." />
-                                    <span class="esp-picker-mode">选择目标</span>
-                                </div>
-                                <div class="esp-folder-recent" id="esp-folder-recent"></div>
-                                <div class="esp-folder-tree" id="esp-folder-tree"></div>
-                                    <div class="esp-picker-footer"><span>可多选文件夹</span><button type="button" class="esp-picker-done" id="esp-folder-done">完成</button><span>Esc 关闭</span></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="esp-folder esp-config-section" id="esp-eagle-tags-section">
-                        <div class="esp-label">标签</div>
-                        <div class="esp-tag-select-wrap" id="esp-tag-select-wrap">
-                            <button class="esp-tag-trigger" id="esp-tag-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-                                <span id="esp-tag-trigger-text">未选择标签</span>
-                                <span class="esp-tag-trigger-meta" id="esp-tag-trigger-meta">添加标签</span>
-                            </button>
-                            <div class="esp-tag-menu" id="esp-tag-menu" role="listbox" aria-label="Eagle 标签列表">
-                                <div class="esp-picker-head">
-                                    <input class="esp-tag-search" id="esp-tag-search" type="text" placeholder="搜索标签..." />
-                                    <span class="esp-picker-mode">可多选</span><button type="button" class="esp-picker-refresh" id="esp-tag-refresh">刷新标签</button>
-                                </div>
-                                <div class="esp-selected-tags" id="esp-selected-tags" aria-label="已选标签"></div>
-                                <div class="esp-tag-recent" id="esp-tag-recent"></div>
-                                <div class="esp-tag-list" id="esp-tag-list"></div>
-                                <div class="esp-tag-manual">
-                                    <textarea class="esp-textarea" id="esp-tags-input" placeholder="手动输入标签，用逗号或换行分隔"></textarea>
-                                </div>
-                                <div class="esp-picker-footer"><span>点击切换</span><span>Enter 完成</span><span>Esc 关闭</span></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="esp-switch-row esp-config-section" id="esp-auto-folder-row">
-                        <label class="esp-switch-label" for="esp-auto-folder">
-                            自动建目录
-                            <span class="esp-help" tabindex="0" data-tooltip="Fab 英文商品名会自动补充中文译名，并按“英文｜中文”创建目录。" aria-label="自动建目录说明">?</span>
-                        </label>
-                        <input class="esp-checkbox" id="esp-auto-folder" type="checkbox" checked />
-                    </div>
-                    <button class="esp-btn esp-btn-primary esp-btn-full" id="esp-btn-deep-scan">
-                        深度扫描全部（自动翻页+原始大图）
-                    </button>
-                    <button class="esp-btn esp-btn-secondary esp-btn-full" id="esp-btn-current-page">
-                        仅采集当前页面
-                    </button>
-                    <button class="esp-btn esp-btn-secondary esp-btn-start esp-btn-full" id="esp-btn-generic-scan">
-                        <span class="esp-btn-label">开始采集</span>
-                    </button>
-                    <div class="esp-btn-row" id="esp-control-row" style="display:none;">
-                        <button class="esp-btn esp-btn-secondary" id="esp-btn-pause">暂停</button>
-                        <button class="esp-btn esp-btn-danger" id="esp-btn-stop">停止</button>
-                    </div>
-                    <div class="esp-status" id="esp-status">等待操作...</div>
-                    <button class="esp-btn esp-btn-secondary esp-btn-full" id="esp-btn-copy-failure-log" style="display:none;" type="button">复制失败日志</button>
-                    </div>
+                <div id="esp-mode-card" class="egc-mode-card"><div id="esp-mode-group" class="egc-mode-grid"></div></div>
+                <div id="esp-eagle-folder-section" class="egc-field egc-config-section">
+                    <div class="egc-label" id="lbl-folder">Eagle 目标文件夹</div>
+                    <div id="esp-folder-picker-slot"></div>
                 </div>
+                <div id="esp-local-folder-section" style="display:none;">
+                    <div class="egc-local-row">
+                        <button id="esp-local-folder-trigger" type="button" class="egc-local-trigger">默认下载文件夹</button>
+                    </div>
+                    <div class="egc-local-hint">点击上方按钮即可选择下载目录、系统文件夹或其他盘符；未选择时使用浏览器默认下载目录。</div>
+                </div>
+                <div id="esp-eagle-tags-section" class="egc-field egc-config-section">
+                    <div class="egc-label" id="lbl-tags">标签</div>
+                    <div id="esp-tag-picker-slot"></div>
+                </div>
+                <div id="esp-auto-folder-row" class="egc-switch-row egc-config-section">
+                    <label class="egc-switch-label" for="esp-auto-folder">自动建目录</label>
+                    <input id="esp-auto-folder" class="egc-checkbox" type="checkbox" checked />
+                </div>
+                <button id="esp-btn-deep-scan" type="button" class="egc-btn primary full">深度扫描全部（自动翻页+原始大图）</button>
+                <button id="esp-btn-current-page" type="button" class="egc-btn secondary full">仅采集当前页面</button>
+                <button id="esp-btn-generic-scan" type="button" class="egc-btn start full"><span class="egc-btn-label">开始采集</span></button>
+                <div id="esp-control-row" class="egc-btn-row" style="display:none;">
+                    <button id="esp-btn-pause" type="button" class="egc-btn secondary">⏸️ 暂停</button>
+                    <button id="esp-btn-stop" type="button" class="egc-btn danger">停止</button>
+                </div>
+                <div id="esp-status" class="egc-status">等待操作...</div>
+                <button id="esp-btn-copy-failure-log" type="button" class="egc-btn secondary full" style="display:none;">复制失败日志</button>
             `;
 
-            // ── 把文件夹/标签菜单搬到 body 顶层 ──
-            // 面板容器 overflow:hidden 会裁剪子元素，backdrop-filter / transform
-            // 还会劫持 position:fixed 的包含块，菜单留在面板内部无论如何定位都会被
-            // 限制在卡片范围内；只有脱离面板层级才能真正悬浮在面板外。
-            // 节点是移动而非克隆，_bindEvents 里绑定的事件全部保留。
-            ['esp-folder-menu', 'esp-tag-menu'].forEach(id => {
-                const menu = this.container.querySelector('#' + id);
-                if (menu) document.body.appendChild(menu);
+            // 问号帮助说明
+            this.collPanel.body.querySelector('#lbl-folder').appendChild(EagleUI.createHelp('选择采集结果写入的 Eagle 目录；开启自动建目录时会以该目录作为父目录。'));
+            this.collPanel.body.querySelector('#lbl-tags').appendChild(EagleUI.createHelp('标签仅保存到 Eagle，可多选，也可手动输入。'));
+            this.collPanel.body.querySelector('.egc-switch-label').appendChild(EagleUI.createHelp('Fab 英文商品名会自动补充中文译名，并按“英文｜中文”创建目录。'));
+
+            // ── 保存方式切换(mode 卡) ──
+            this.modeSwitch = EagleUI.createModeSwitch({
+                options: [
+                    { value: 'eagle', label: '保存到 Eagle' },
+                    { value: 'local', label: '本地下载' },
+                ],
+                value: this.actionMode,
+                onChange: (mode) => this.setActionMode(mode),
             });
+            this.collPanel.body.querySelector('#esp-mode-group').appendChild(this.modeSwitch.el);
 
-            // ── 绑定事件 ──
-            this._bindEvents();
-            this._bindHelpTooltips();
-            this.renderFolderMenu();
-            this.syncFolderTriggerLabel();
-            this.renderTagMenu();
-            this.syncTagTriggerLabel();
-            this.updateActionModeUI();
-        },
-
-        /**
-         * 绑定面板交互事件
-         */
-        _bindEvents() {
-            const header = this.container.querySelector('.esp-header');
-            const collapsedIcon = this.container.querySelector('.esp-collapsed-icon');
-
-            // 点击头部或折叠图标 → 切换展开/折叠
-            header.addEventListener('click', () => this.toggle());
-            collapsedIcon.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.expand();
+            // ── 文件夹选择器:单选 + 搜索 + 最近(库组件) ──
+            this.folderPicker = EagleUI.createFolderPicker({
+                rootLabel: '默认（根目录）',
+                recent: this.recentFolders,
+                onRecentChange: (ids) => {
+                    this.recentFolders = ids;
+                    try { GM_setValue(STORAGE_KEYS.recentFolders, ids); } catch (err) { Log.warn('保存最近文件夹失败:', err.message); }
+                },
+                onChange: (ids) => {
+                    this.selectedFolderIds = ids;
+                    this.folderId = ids[0] || '';
+                    try {
+                        GM_setValue(STORAGE_KEYS.lastFolderId, this.folderId || '');
+                        GM_setValue(STORAGE_KEYS.folderIds, ids);
+                    } catch (err) { Log.warn('保存文件夹选择失败:', err.message); }
+                },
             });
+            if (this.selectedFolderIds.length > 0) this.folderPicker.setSelected(this.selectedFolderIds);
+            this.collPanel.body.querySelector('#esp-folder-picker-slot').appendChild(this.folderPicker.el);
 
-            // 深度扫描按钮
-            this.container.querySelector('#esp-btn-deep-scan').addEventListener('click', () => {
-                this._startDeepScan();
+            // ── 标签选择器:搜索+已选+最近+分组+手输(库组件) ──
+            this.tagPicker = EagleUI.createTagPicker({
+                selected: this.selectedTags,
+                recent: this.recentTags,
+                onRefresh: () => this.refreshEagleTags(true),
+                onChange: (selected) => this.setSelectedTags(selected),
+                onRecentChange: (recent) => {
+                    this.recentTags = recent;
+                    try { GM_setValue(STORAGE_KEYS.recentTags, recent); } catch (err) { Log.warn('保存最近标签失败:', err.message); }
+                },
             });
+            this.collPanel.body.querySelector('#esp-tag-picker-slot').appendChild(this.tagPicker.el);
 
-            // 当前页采集按钮
-            this.container.querySelector('#esp-btn-current-page').addEventListener('click', () => {
-                this._captureCurrentPage();
-            });
-
-            // 通用扫描按钮
-            this.container.querySelector('#esp-btn-generic-scan').addEventListener('click', () => {
-                this._startGenericScan();
-            });
-
-            // 动作模式切换
-            this.container.querySelectorAll('.esp-mode-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const targetMode = btn.dataset.mode === 'local' ? 'local' : 'eagle';
-                    this.setActionMode(targetMode);
-                });
-            });
-
-            // 暂停按钮
-            this.container.querySelector('#esp-btn-pause').addEventListener('click', () => {
-                // 切换暂停状态
-                const btn = this.container.querySelector('#esp-btn-pause');
+            // ── 业务按钮绑定(沿用旧逻辑,id 不变) ──
+            const body = this.collPanel.body;
+            body.querySelector('#esp-btn-deep-scan').addEventListener('click', () => this._startDeepScan());
+            body.querySelector('#esp-btn-current-page').addEventListener('click', () => this._captureCurrentPage());
+            body.querySelector('#esp-btn-generic-scan').addEventListener('click', () => this._startGenericScan());
+            body.querySelector('#esp-btn-pause').addEventListener('click', () => {
+                const btn = body.querySelector('#esp-btn-pause');
                 if (btn.textContent.includes('暂停')) {
                     this._isPaused = true;
                     btn.textContent = '▶️ 继续';
@@ -4397,245 +2896,31 @@
                     btn.textContent = '⏸️ 暂停';
                 }
             });
-
-            // 停止按钮
-            this.container.querySelector('#esp-btn-stop').addEventListener('click', () => {
-                this.stopScan();
-            });
-
-            // 失败日志不依赖开发者工具；用户可直接复制后自行查看或发给我继续定位。
-            this.container.querySelector('#esp-btn-copy-failure-log').addEventListener('click', () => {
-                this.copyFailureReport();
-            });
-
-            // 自定义文件夹下拉菜单（菜单节点已挂到 body 顶层，需从 document 查找）
-            const folderTrigger = this.container.querySelector('#esp-folder-trigger');
-            const folderMenu = document.getElementById('esp-folder-menu');
-            const folderWrap = this.container.querySelector('#esp-folder-select-wrap');
-            if (folderTrigger) {
-                folderTrigger.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.toggleFolderMenu();
-                });
-            }
-            if (folderMenu) {
-                folderMenu.addEventListener('click', (e) => e.stopPropagation());
-            }
-            const folderDone = document.getElementById('esp-folder-done');
-            if (folderDone) {
-                folderDone.addEventListener('click', () => this.closeFolderMenu());
-            }
-            const folderSearch = document.getElementById('esp-folder-search');
-            if (folderSearch) {
-                folderSearch.addEventListener('input', (e) => {
-                    this.folderSearchKeyword = String(e.target.value || '').trim().toLowerCase();
-                    this.renderFolderMenu();
-                });
-            }
-            const tagTrigger = this.container.querySelector('#esp-tag-trigger');
-            const tagMenu = document.getElementById('esp-tag-menu');
-            const tagWrap = this.container.querySelector('#esp-tag-select-wrap');
-            if (tagTrigger) {
-                tagTrigger.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.toggleTagMenu();
-                });
-            }
-            if (tagMenu) tagMenu.addEventListener('click', (e) => e.stopPropagation());
-            const tagSearch = document.getElementById('esp-tag-search');
-            if (tagSearch) {
-                tagSearch.addEventListener('input', (e) => {
-                    this.tagSearchKeyword = String(e.target.value || '').trim().toLowerCase();
-                    this.renderTagMenu();
-                });
-            }
-            const tagRefresh = document.getElementById('esp-tag-refresh');
-            if (tagRefresh) tagRefresh.addEventListener('click', () => this.refreshEagleTags(true));
-            const manualTagInput = document.getElementById('esp-tags-input');
-            if (manualTagInput) manualTagInput.addEventListener('input', () => this.syncTagTriggerLabel());
-            document.addEventListener('click', (e) => {
-                // 菜单挂到 body 后不再位于 wrap 内部，点击菜单自身也不允许触发关闭
-                if (folderWrap && !folderWrap.contains(e.target) && !folderMenu?.contains(e.target)) this.closeFolderMenu();
-                if (tagWrap && !tagWrap.contains(e.target) && !tagMenu?.contains(e.target)) this.closeTagMenu();
-            });
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    this.closeFolderMenu();
-                    this.closeTagMenu();
-                }
-                if (e.key === 'Enter' && tagWrap?.classList.contains('open') && e.target !== manualTagInput) {
-                    e.preventDefault();
-                    this.closeTagMenu();
-                }
-            });
-
-            // 文件夹选择变化
-            this.container.querySelector('#esp-folder-select').addEventListener('change', (e) => {
-                this.setFolderSelection(e.target.value);
-            });
-
+            body.querySelector('#esp-btn-stop').addEventListener('click', () => this.stopScan());
+            body.querySelector('#esp-btn-copy-failure-log').addEventListener('click', () => this.copyFailureReport());
             // 本地下载目录选择：必须由用户点击触发浏览器授权。
-            const localFolderTrigger = this.container.querySelector('#esp-local-folder-trigger');
-            if (localFolderTrigger) {
-                localFolderTrigger.addEventListener('click', async () => {
-                    await this.pickLocalDirectory();
-                });
-            }
-
-            // 浏览器缩放或窗口尺寸变化时，重新计算已打开弹层的可用高度与展开方向。
-            window.addEventListener('resize', () => this.positionOpenPickerMenus());
-
-        },
-        /**
-         * 根据触发按钮上下方的真实可用空间定位弹层。
-         * 优先完整容纳目标高度；两侧都放不下时选择空间更大的一侧，并让中间列表滚动。
-         */
-        positionPickerMenu(menu, trigger, desiredHeight) {
-            if (!menu || !trigger) return;
-            const viewportMargin = 16;
-            const horizontalMargin = 10;
-            const gap = 8;
-            const rect = trigger.getBoundingClientRect();
-            const availableBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportMargin);
-            const availableAbove = Math.max(0, rect.top - gap - viewportMargin);
-
-            let openAbove = false;
-            if (availableBelow >= desiredHeight) {
-                openAbove = false;
-            } else if (availableAbove >= desiredHeight) {
-                openAbove = true;
-            } else {
-                openAbove = availableAbove > availableBelow;
-            }
-
-            const availableHeight = openAbove ? availableAbove : availableBelow;
-            const resolvedHeight = Math.max(96, Math.floor(Math.min(desiredHeight, availableHeight)));
-            /*
-             * 菜单挂载在 body 顶层并用 position:fixed 定位，
-             * 这里的 top/bottom/left 全部直接写视口坐标（px），
-             * 不再依赖触发按钮祖先的布局位置。
-             */
-            menu.style.top = openAbove ? 'auto' : Math.round(rect.bottom + gap) + 'px';
-            menu.style.bottom = openAbove ? Math.round(window.innerHeight - rect.top + gap) + 'px' : 'auto';
-            menu.style.height = resolvedHeight + 'px';
-            menu.style.maxHeight = resolvedHeight + 'px';
-            menu.style.transformOrigin = openAbove ? 'bottom right' : 'top right';
-            menu.classList.toggle('opens-upward', openAbove);
-
-            /*
-             * 选择器可比主面板更宽（420px 的独立浮层）。
-             * 默认仍与触发按钮右侧对齐；仅在窄视口中会向内平移，
-             * 保证浮层本身不越过浏览器左右边界。
-             */
-            const menuWidth = menu.getBoundingClientRect().width;
-            const minLeft = horizontalMargin;
-            const maxLeft = Math.max(minLeft, window.innerWidth - horizontalMargin - menuWidth);
-            const targetLeft = Math.max(minLeft, Math.min(rect.right - menuWidth, maxLeft));
-            menu.style.left = Math.round(targetLeft) + 'px';
-            menu.style.right = 'auto';
-        },
-
-        /** 重新定位当前已展开的文件夹或标签弹层。 */
-        positionOpenPickerMenus() {
-            const folderWrap = this.getFolderWrap();
-            if (folderWrap?.classList.contains('open')) {
-                this.positionPickerMenu(document.getElementById('esp-folder-menu'), this.getFolderTrigger(), 540);
-            }
-            const tagWrap = this.getTagWrap();
-            if (tagWrap?.classList.contains('open')) {
-                this.positionPickerMenu(
-                    document.getElementById('esp-tag-menu'),
-                    this.container?.querySelector('#esp-tag-trigger'),
-                    600
-                );
-            }
-        },
-
-        /**
-         * 为问号说明绑定可视区域内的浮层提示。
-         * 使用 body 级 fixed 浮层，避免被面板 overflow 或页面边界裁切。
-         */
-        _bindHelpTooltips() {
-            const helpItems = Array.from(this.container.querySelectorAll('.esp-help[data-tooltip]'));
-            if (helpItems.length === 0) return;
-
-            const tooltip = document.createElement('div');
-            tooltip.className = 'esp-tooltip';
-            tooltip.setAttribute('role', 'tooltip');
-            document.body.appendChild(tooltip);
-
-            let activeHelp = null;
-            let hideTimer = 0;
-
-            const hide = () => {
-                window.clearTimeout(hideTimer);
-                activeHelp = null;
-                tooltip.classList.remove('visible');
-            };
-
-            const show = (help) => {
-                window.clearTimeout(hideTimer);
-                activeHelp = help;
-                tooltip.textContent = help.dataset.tooltip || '';
-                tooltip.style.left = '0px';
-                tooltip.style.top = '0px';
-                tooltip.classList.add('visible');
-
-                const anchor = help.getBoundingClientRect();
-                const panel = this.container.getBoundingClientRect();
-                const viewportPadding = 8;
-                const boundaryLeft = Math.max(viewportPadding, panel.left + 8);
-                const boundaryRight = Math.min(window.innerWidth - viewportPadding, panel.right - 8);
-                const boundaryTop = Math.max(viewportPadding, panel.top + 4);
-                const boundaryBottom = Math.min(window.innerHeight - viewportPadding, panel.bottom - 4);
-                const boundaryWidth = Math.max(80, boundaryRight - boundaryLeft);
-                const tooltipWidth = Math.min(232, boundaryWidth);
-                tooltip.style.width = `${tooltipWidth}px`;
-
-                const tooltipRect = tooltip.getBoundingClientRect();
-                const gap = 7;
-                let left = anchor.left + (anchor.width / 2) - (tooltipRect.width / 2);
-                left = Math.max(boundaryLeft, Math.min(left, boundaryRight - tooltipRect.width));
-
-                const belowTop = anchor.bottom + gap;
-                const aboveTop = anchor.top - tooltipRect.height - gap;
-                const canPlaceBelow = belowTop + tooltipRect.height <= boundaryBottom;
-                const preferredTop = canPlaceBelow ? belowTop : aboveTop;
-                const top = Math.max(boundaryTop, Math.min(preferredTop, Math.max(boundaryTop, boundaryBottom - tooltipRect.height)));
-
-                tooltip.style.left = `${Math.round(left)}px`;
-                tooltip.style.top = `${Math.round(top)}px`;
-                tooltip.setAttribute('aria-label', tooltip.textContent);
-            };
-
-            helpItems.forEach(help => {
-                help.addEventListener('mouseenter', () => show(help));
-                help.addEventListener('mouseleave', () => {
-                    hideTimer = window.setTimeout(hide, 80);
-                });
-                help.addEventListener('focus', () => show(help));
-                help.addEventListener('blur', hide);
+            body.querySelector('#esp-local-folder-trigger').addEventListener('click', async () => {
+                await this.pickLocalDirectory();
             });
 
-            window.addEventListener('resize', () => {
-                if (activeHelp) show(activeHelp);
-            });
-            window.addEventListener('scroll', hide, true);
+            document.body.appendChild(this.container);
+            this.collapse();
+            this.updateActionModeUI();
+            Log.info('UI 面板已注入（eagle-ui 家族组件）');
         },
 
-        /** 展开面板 */
+        /** 展开面板(库折叠面板) */
         expand() {
-            this.container.classList.remove('collapsed');
-            this.container.classList.add('expanded');
+            if (this.collPanel) this.collPanel.expand();
             this.isExpanded = true;
             this.isCollapsed = false;
         },
 
-        /** 折叠面板 */
+        /** 折叠面板(先收起可能展开的选择器弹层) */
         collapse() {
-            this.closeFolderMenu();
-            this.container.classList.add('collapsed');
-            this.container.classList.remove('expanded');
+            if (this.folderPicker) this.folderPicker.close();
+            if (this.tagPicker) this.tagPicker.close();
+            if (this.collPanel) this.collPanel.collapse();
             this.isExpanded = false;
             this.isCollapsed = true;
         },
@@ -4654,7 +2939,7 @@
             const el = this.container.querySelector('#esp-status');
             if (el) {
                 el.textContent = text;
-                el.className = 'esp-status ' + type;
+                el.className = 'egc-status ' + type;
             }
         },
 
@@ -4765,43 +3050,33 @@
                 const btn = this.container.querySelector('#' + id);
                 if (btn) btn.disabled = !enabled;
             });
-            this.container.querySelectorAll('.esp-mode-btn').forEach(btn => {
+            if (this.modeSwitch) this.modeSwitch.el.querySelectorAll('button').forEach(btn => {
                 btn.disabled = !enabled;
             });
         },
 
-        /**
-         * 读取当前面板中的标签输入。
-         * @returns {string[]}
-         */
-        getManualTags() {
-            // 手动输入框位于 body 顶层的标签菜单浮层内
-            const el = document.getElementById('esp-tags-input');
-            return mergeTags(this.selectedTags, parseTagsInput(el ? el.value : ''));
-        },
-
-        /**
-         * 读取 Eagle 真实标签目录。列表只接受 Eagle API 返回的数据，
-         * 页面上下文标签和媒体类型标签仍由扫描任务单独生成，不进入此选择器。
-         */
         async refreshEagleTags(force = false) {
             if (this.tagCatalogLoading) return;
             this.tagCatalogLoading = true;
             this.tagCatalogError = '';
-            this.renderTagMenu();
+            if (this.tagPicker) this.tagPicker.setLoading(true);
             try {
                 const catalog = await EagleAPI.getTagCatalog(force);
                 this.eagleTags = Array.isArray(catalog?.tags) ? catalog.tags.filter(item => item && item.name) : [];
                 this.eagleTagGroups = Array.isArray(catalog?.groups) ? catalog.groups.filter(item => item && item.id) : [];
+                if (this.tagPicker) {
+                    this.tagPicker.setTags(this.eagleTags);
+                    this.tagPicker.setGroups(this.eagleTagGroups);
+                }
                 this.markEagleAvailable('tag-catalog');
             } catch (err) {
                 // 标签是辅助配置；刷新失败时保留上次成功读取的内容，
                 // 不能因为标签接口偶发失败把 Eagle 状态降级成未启动。
                 this.tagCatalogError = '无法读取 Eagle 标签，请确认 Eagle 正在运行';
+                if (this.tagPicker) this.tagPicker.setError(this.tagCatalogError);
                 Log.warn('读取 Eagle 标签失败:', err.message);
             } finally {
                 this.tagCatalogLoading = false;
-                this.renderTagMenu();
             }
         },
 
@@ -4833,270 +3108,9 @@
             } catch (err) {
                 Log.warn('保存当前网站已选标签失败:', err.message);
             }
-            this.renderTagMenu();
-            this.syncTagTriggerLabel();
+            if (this.tagPicker) this.tagPicker.setSelected(this.selectedTags, true);
         },
 
-        /** 同步标签入口的摘要文案。 */
-        syncTagTriggerLabel() {
-            const text = this.container?.querySelector('#esp-tag-trigger-text');
-            const meta = this.container?.querySelector('#esp-tag-trigger-meta');
-            if (!text || !meta) return;
-            const manualTags = parseTagsInput(document.getElementById('esp-tags-input')?.value || '');
-            const tags = mergeTags(this.selectedTags, manualTags);
-            text.textContent = tags.length > 0 ? tags.slice(0, 2).join('、') + (tags.length > 2 ? '…' : '') : '未选择标签';
-            meta.textContent = tags.length > 0 ? `${tags.length} 个已选` : '添加标签';
-            this.container.querySelector('#esp-tag-trigger')?.setAttribute('aria-expanded', this.getTagWrap()?.classList.contains('open') ? 'true' : 'false');
-        },
-
-        getTagWrap() {
-            return this.container?.querySelector('#esp-tag-select-wrap');
-        },
-
-        renderTagMenu() {
-            return this.renderEagleTagMenu();
-        },
-
-        renderEagleTagMenu() {
-            // 标签列表/最近使用/已选区块都在 body 顶层的菜单浮层内
-            const list = document.getElementById('esp-tag-list');
-            const recent = document.getElementById('esp-tag-recent');
-            if (!list || !recent) return;
-            const keyword = String(this.tagSearchKeyword || '').trim().toLowerCase();
-            const selected = new Set(this.selectedTags);
-            const selectedContainer = document.getElementById('esp-selected-tags');
-            const tagEntries = this.eagleTags.map(item => ({
-                name: String(item.name || '').trim(),
-                count: Number.isFinite(Number(item.imageCount)) ? Number(item.imageCount) : null,
-            })).filter(item => item.name);
-            const byName = new Map(tagEntries.map(item => [item.name, item]));
-
-            // 即使 Eagle 标签接口暂时没有返回数据，也必须让用户看见并清除当前已选标签。
-            if (selectedContainer) {
-                selectedContainer.innerHTML = '';
-                selectedContainer.classList.toggle('has-items', this.selectedTags.length > 0);
-                this.selectedTags.forEach(tag => {
-                    const chip = document.createElement('span');
-                    chip.className = 'esp-selected-tag';
-                    chip.title = tag;
-                    const name = document.createElement('span');
-                    name.className = 'esp-selected-tag-name';
-                    name.textContent = tag;
-                    const remove = document.createElement('button');
-                    remove.type = 'button';
-                    remove.className = 'esp-selected-tag-remove';
-                    remove.textContent = '×';
-                    remove.title = `移除标签：${tag}`;
-                    remove.setAttribute('aria-label', `移除标签：${tag}`);
-                    remove.addEventListener('click', () => this.setSelectedTags(this.selectedTags.filter(item => item !== tag)));
-                    chip.append(name, remove);
-                    selectedContainer.appendChild(chip);
-                });
-                if (this.selectedTags.length > 1) {
-                    const clear = document.createElement('button');
-                    clear.type = 'button';
-                    clear.className = 'esp-selected-tags-clear';
-                    clear.textContent = '清空已选';
-                    clear.addEventListener('click', () => this.setSelectedTags([]));
-                    selectedContainer.appendChild(clear);
-                }
-            }
-
-            recent.innerHTML = '';
-            const recentItems = this.recentTags.filter(tag => byName.has(tag) && (!keyword || tag.toLowerCase().includes(keyword))).slice(0, 8);
-            recent.classList.toggle('has-items', recentItems.length > 0);
-            recentItems.forEach(tag => {
-                const chip = document.createElement('button');
-                chip.type = 'button';
-                chip.className = 'esp-recent-chip';
-                chip.textContent = tag;
-                chip.title = '快速选择：' + tag;
-                chip.addEventListener('click', () => {
-                    if (!this.selectedTags.includes(tag)) this.setSelectedTags(mergeTags(this.selectedTags, [tag]));
-                });
-                recent.appendChild(chip);
-            });
-
-            list.innerHTML = '';
-            if (this.tagCatalogLoading) {
-                list.innerHTML = '<div class="esp-tag-empty">正在读取 Eagle 标签...</div>';
-                return;
-            }
-            if (this.tagCatalogError) {
-                list.innerHTML = '<div class="esp-tag-empty">' + this.tagCatalogError + '</div>';
-                return;
-            }
-
-            const renderOption = (entry, parent) => {
-                if (keyword && !entry.name.toLowerCase().includes(keyword)) return;
-                const option = document.createElement('button');
-                option.type = 'button';
-                option.className = 'esp-tag-option' + (selected.has(entry.name) ? ' active' : '');
-                option.setAttribute('role', 'option');
-                option.setAttribute('aria-selected', selected.has(entry.name) ? 'true' : 'false');
-                option.innerHTML = '<span class="esp-tag-option-check">' + (selected.has(entry.name) ? '✓' : '') + '</span><span class="esp-tag-option-label"></span><span class="esp-tag-option-count"></span>';
-                option.querySelector('.esp-tag-option-label').textContent = entry.name;
-                option.querySelector('.esp-tag-option-count').textContent = entry.count === null ? '' : String(entry.count);
-                option.addEventListener('click', () => {
-                    const nextSelectedTags = selected.has(entry.name)
-                        ? this.selectedTags.filter(item => item !== entry.name)
-                        : mergeTags(this.selectedTags, [entry.name]);
-                    this.recentTags = mergeTags([entry.name], this.recentTags).slice(0, 24);
-                    try {
-                        GM_setValue(STORAGE_KEYS.recentTags, this.recentTags);
-                    } catch (err) {
-                        Log.warn('保存最近标签失败:', err.message);
-                    }
-                    this.setSelectedTags(nextSelectedTags);
-                });
-                parent.appendChild(option);
-            };
-
-            const renderGroup = (id, title, entries) => {
-                const visibleEntries = entries.filter(entry => !keyword || entry.name.toLowerCase().includes(keyword));
-                if (visibleEntries.length === 0) return false;
-                const section = document.createElement('section');
-                section.className = 'esp-tag-group';
-                const collapsed = this.tagGroupsCollapsed.has(id);
-                const header = document.createElement('button');
-                header.type = 'button';
-                header.className = 'esp-tag-group-title' + (collapsed ? ' collapsed' : '');
-                header.innerHTML = '<span>' + title + ' <span class="esp-tag-group-title-meta">(' + visibleEntries.length + ')</span></span><span class="esp-tag-group-title-chevron">⌄</span>';
-                header.addEventListener('click', () => {
-                    if (this.tagGroupsCollapsed.has(id)) this.tagGroupsCollapsed.delete(id);
-                    else this.tagGroupsCollapsed.add(id);
-                    this.renderTagMenu();
-                });
-                section.appendChild(header);
-                if (!collapsed) {
-                    const items = document.createElement('div');
-                    items.className = 'esp-tag-group-items';
-                    if (visibleEntries.length < 2) items.classList.add('single-column');
-                    visibleEntries.forEach(entry => renderOption(entry, items));
-                    section.appendChild(items);
-                }
-                list.appendChild(section);
-                return true;
-            };
-
-            const groupedNames = new Set();
-            let hasVisibleGroup = false;
-            this.eagleTagGroups.forEach(group => {
-                const entries = (Array.isArray(group.tags) ? group.tags : [])
-                    .map(name => byName.get(String(name || '').trim()))
-                    .filter(Boolean);
-                entries.forEach(entry => groupedNames.add(entry.name));
-                if (renderGroup(String(group.id), String(group.name || '未命名分组'), entries)) hasVisibleGroup = true;
-            });
-            const ungrouped = tagEntries.filter(entry => !groupedNames.has(entry.name));
-            if (renderGroup('__ungrouped__', '未分组', ungrouped)) hasVisibleGroup = true;
-            if (!hasVisibleGroup) {
-                list.innerHTML = tagEntries.length === 0 ? '<div class="esp-tag-empty">Eagle 中没有可用标签</div>' : '<div class="esp-tag-empty">没有匹配的 Eagle 标签</div>';
-            }
-        },
-
-        /* 旧的标签渲染代码保留在后续历史区块中，实际入口由上面的新渲染器接管。 */
-        /* legacy renderer disabled */
-        /*
-            const list = this.container?.querySelector('#esp-tag-list');
-            const recent = this.container?.querySelector('#esp-tag-recent');
-            if (!list || !recent) return;
-            const keyword = String(this.tagSearchKeyword || '').trim().toLowerCase();
-            const suggestions = this.getTagSuggestions().filter(tag => !keyword || tag.toLowerCase().includes(keyword));
-            const selected = new Set(this.selectedTags);
-            list.innerHTML = '';
-            if (suggestions.length === 0) {
-                list.innerHTML = '<div class="esp-tag-empty">没有匹配的标签，可在下方手动输入</div>';
-            } else {
-                suggestions.forEach(tag => {
-                    const option = document.createElement('button');
-                    option.type = 'button';
-                    option.className = `esp-tag-option${selected.has(tag) ? ' active' : ''}`;
-                    option.setAttribute('role', 'option');
-                    option.setAttribute('aria-selected', selected.has(tag) ? 'true' : 'false');
-                    option.innerHTML = `<span class="esp-tag-option-check">${selected.has(tag) ? '✓' : ''}</span><span class="esp-tag-option-label"></span>`;
-                    option.querySelector('.esp-tag-option-label').textContent = tag;
-                    option.addEventListener('click', () => {
-                        if (selected.has(tag)) this.selectedTags = this.selectedTags.filter(item => item !== tag);
-                        else this.selectedTags = mergeTags(this.selectedTags, [tag]);
-                        this.recentTags = mergeTags([tag], this.recentTags).slice(0, 24);
-                        try {
-                            GM_setValue(STORAGE_KEYS.selectedTags, this.selectedTags);
-                            GM_setValue(STORAGE_KEYS.recentTags, this.recentTags);
-                        } catch (err) {
-                            Log.warn('保存标签选择失败:', err.message);
-                        }
-                        this.renderTagMenu();
-                        this.syncTagTriggerLabel();
-                    });
-                    list.appendChild(option);
-                });
-            }
-
-            recent.innerHTML = '';
-            const recentItems = this.recentTags.filter(tag => !keyword || tag.toLowerCase().includes(keyword)).slice(0, 6);
-            recent.classList.toggle('has-items', recentItems.length > 0);
-            recentItems.forEach(tag => {
-                const chip = document.createElement('button');
-                chip.type = 'button';
-                chip.className = 'esp-recent-chip';
-                chip.textContent = tag;
-                chip.title = `快速选择：${tag}`;
-                chip.addEventListener('click', () => {
-                    if (!this.selectedTags.includes(tag)) this.selectedTags = mergeTags(this.selectedTags, [tag]);
-                    this.renderTagMenu();
-                    this.syncTagTriggerLabel();
-                });
-                recent.appendChild(chip);
-            });
-        },
-        */
-        openTagMenu() {
-            const wrap = this.getTagWrap();
-            if (!wrap) return;
-            this.closeFolderMenu();
-            // wrap 上的 open 驱动触发按钮图标；菜单自身挂在 body 顶层，需单独同步 open
-            wrap.classList.add('open');
-            const menu = document.getElementById('esp-tag-menu');
-            if (menu) menu.classList.add('open');
-            this.positionPickerMenu(
-                menu,
-                this.container?.querySelector('#esp-tag-trigger'),
-                600
-            );
-            window.requestAnimationFrame(() => this.positionOpenPickerMenus());
-            this.syncTagTriggerLabel();
-            if (this.eagleTags.length === 0 && !this.tagCatalogLoading) this.refreshEagleTags(false);
-            const search = document.getElementById('esp-tag-search');
-            if (search) {
-                search.focus({ preventScroll: true });
-                search.select();
-            }
-        },
-
-        closeTagMenu() {
-            const wrap = this.getTagWrap();
-            document.getElementById('esp-tag-menu')?.classList.remove('open');
-            if (!wrap) return;
-            wrap.classList.remove('open');
-            this.tagSearchKeyword = '';
-            const search = document.getElementById('esp-tag-search');
-            if (search) search.value = '';
-            this.renderTagMenu();
-            this.syncTagTriggerLabel();
-        },
-
-        toggleTagMenu() {
-            const wrap = this.getTagWrap();
-            if (!wrap) return;
-            if (wrap.classList.contains('open')) this.closeTagMenu();
-            else this.openTagMenu();
-        },
-
-        /**
-         * 读取当前动作模式。
-         * @returns {'eagle'|'local'}
-         */
         getActionMode() {
             return this.actionMode === 'local' ? 'local' : 'eagle';
         },
@@ -5157,7 +3171,7 @@
         updateActionModeUI() {
             const mode = this.getActionMode();
             const localFolderSection = this.container.querySelector('#esp-local-folder-section');
-            const eagleFolderWrap = this.container.querySelector('#esp-folder-select-wrap');
+            const eagleFolderWrap = this.container.querySelector('#esp-eagle-folder-section');
             const tagsSection = this.container.querySelector('#esp-eagle-tags-section');
             const autoFolderRow = this.container.querySelector('#esp-auto-folder-row');
             const genericButton = this.container.querySelector('#esp-btn-generic-scan');
@@ -5169,12 +3183,8 @@
             if (autoFolderRow) autoFolderRow.style.display = mode === 'local' ? 'none' : (this.isFabContext() || this.isEHentaiContext() ? 'flex' : autoFolderRow.style.display);
             if (genericButton && this.isFabContext()) this.setGenericButtonLabel(mode === 'local' ? '开始下载' : '开始采集');
 
-            // 1. 同步顶部模式按钮高亮
-            this.container.querySelectorAll('.esp-mode-btn').forEach(btn => {
-                const active = btn.dataset.mode === mode;
-                btn.classList.toggle('active', active);
-                btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-            });
+            // 1. 同步顶部模式按钮高亮(库 mode 组件)
+            if (this.modeSwitch) this.modeSwitch.set(mode, true);
 
             // 2. Eagle 专属配置区在本地模式下置灰并禁用
             const eagleOnlySelectors = [
@@ -5196,26 +3206,15 @@
                 });
             });
 
-            // 3. 目录触发器禁用状态单独处理，避免“仅靠 disabled 样式但仍能打开菜单”
-            const folderTrigger = this.getFolderTrigger();
-            const folderWrap = this.getFolderWrap();
-            const localFolderTrigger = this.container.querySelector('#esp-local-folder-trigger');
-            if (folderTrigger) {
-                folderTrigger.disabled = mode === 'local';
-            }
-            if (localFolderTrigger) {
-                localFolderTrigger.disabled = false;
-            }
-            if (mode === 'local' && folderWrap) {
-                folderWrap.classList.remove('open');
-            }
+            // 3. 本地模式下收起文件夹选择器弹层(Eagle 配置区已整体隐藏)
+            if (mode === 'local' && this.folderPicker) this.folderPicker.close();
 
         },
 
         /** 统一更新通用采集按钮文案，避免覆盖边框动效所需的内部标签。 */
         setGenericButtonLabel(text) {
             const button = this.container.querySelector('#esp-btn-generic-scan');
-            const label = button?.querySelector('.esp-btn-label');
+            const label = button?.querySelector('.egc-btn-label');
             if (label) label.textContent = text;
             else if (button) button.textContent = text;
         },
@@ -5290,8 +3289,7 @@
                 pending: '检测中',
             };
             el.className = `esp-connection-status is-${normalized}`;
-            const label = el.querySelector('.esp-connection-label');
-            if (label) label.textContent = labels[normalized];
+            if (this.connStatus) this.connStatus.set(normalized, labels[normalized]);
         },
 
         /**
@@ -5323,13 +3321,13 @@
         async ensureAutoTargetFolder(folderName) {
             if (this.isLocalMode() || !this.isAutoFolderEnabled()) {
                 const selectedFolderIds = this.getSelectedFolderIds();
-                this.folderId = selectedFolderIds[0] || this.container.querySelector('#esp-folder-select')?.value || '';
+                this.folderId = selectedFolderIds[0] || '';
                 this.selectedFolderIds = selectedFolderIds;
                 return this.folderId;
             }
 
             const selectedFolderIds = this.getSelectedFolderIds();
-            const manuallySelected = selectedFolderIds[0] || this.container.querySelector('#esp-folder-select')?.value || '';
+            const manuallySelected = selectedFolderIds[0] || '';
             if (!this.folders || this.folders.length === 0) {
                 this.folders = await EagleAPI.getFolders();
             }
@@ -5349,11 +3347,11 @@
                 const created = await EagleAPI.createFolder(folderName, manuallySelected);
                 found = { id: created.id, name: created.name, raw: created };
                 await this.loadFolders();
-                this.setFolderSelection(manuallySelected, { persist: false, refreshHint: false });
+                if (this.folderPicker && manuallySelected) this.folderPicker.setSelected([manuallySelected]);
             }
 
+            // 单选语义:自动目录只作为本轮写入目标(folderId),不改变用户手动选择。
             this.folderId = found.id;
-            this.selectedFolderIds = Array.from(new Set([found.id, ...selectedFolderIds.filter(id => id !== manuallySelected)]));
             return found.id;
         },
 
@@ -5366,447 +3364,18 @@
                 const { folderName } = getEHentaiGalleryInfo();
                 return this.ensureAutoTargetFolder(folderName);
             }
-            this.folderId = this.getSelectedFolderIds()[0] || this.container.querySelector('#esp-folder-select')?.value || '';
+            this.folderId = this.getSelectedFolderIds()[0] || '';
             return this.folderId;
         },
 
-        /**
-         * 获取当前下拉框对应的目录名，主要用于面板提示文案。
-         * @returns {string}
-         */
-        getSelectedFolderName() {
-            const ids = this.getSelectedFolderIds();
-            if (ids.length === 0) return '默认（根目录）';
-            if (ids.length > 1) return `${ids.length} 个文件夹`;
-            const found = flattenFolders(this.folders).find(folder => folder.id === ids[0]);
-            return found ? found.name : '已选目录';
-        },
-
-        /** 返回当前多选文件夹 ID，并保持原生 select 的首选值兼容旧流程。 */
         getSelectedFolderIds() {
-            const validIds = new Set(flattenFolders(this.folders).map(folder => String(folder.id)));
-            return Array.from(new Set((this.selectedFolderIds || []).map(String)))
-                .filter(id => validIds.size === 0 || validIds.has(id));
+            // 单选语义:库 picker 持有唯一真值;空数组即"默认(根目录)"。
+            return this.folderPicker ? this.folderPicker.getSelected() : (this.selectedFolderIds || []).slice(0, 1);
         },
 
-        /**
-         * 获取原生 select，作为数据源存放真实 folderId。
-         * 自定义下拉只负责显示与交互，最终仍以这个 select 的 value 为准，
-         * 这样可以最小化对现有业务逻辑的影响。
-         * @returns {HTMLSelectElement|null}
-         */
-        getFolderSelect() {
-            return this.container.querySelector('#esp-folder-select');
-        },
-
-        /**
-         * 获取自定义下拉触发按钮。
-         * @returns {HTMLButtonElement|null}
-         */
-        getFolderTrigger() {
-            return this.container.querySelector('#esp-folder-trigger');
-        },
-
-        /**
-         * 获取自定义下拉菜单容器。
-         * @returns {HTMLDivElement|null}
-         */
-        getFolderMenu() {
-            // 菜单挂在 body 顶层，必须从 document 查找
-            return document.getElementById('esp-folder-menu');
-        },
-
-        /**
-         * 获取文件夹树列表容器。
-         * @returns {HTMLDivElement|null}
-         */
-        getFolderTree() {
-            // 文件夹树位于 body 顶层的菜单浮层内
-            return document.getElementById('esp-folder-tree');
-        },
-
-        /**
-         * 获取文件夹搜索输入框。
-         * @returns {HTMLInputElement|null}
-         */
-        getFolderSearchInput() {
-            // 搜索框位于 body 顶层的菜单浮层内
-            return document.getElementById('esp-folder-search');
-        },
-
-        /**
-         * 获取自定义下拉包裹层。
-         * @returns {HTMLDivElement|null}
-         */
-        getFolderWrap() {
-            return this.container.querySelector('#esp-folder-select-wrap');
-        },
-
-        /**
-         * 判断某个目录是否展开。
-         * @param {string} folderId
-         * @returns {boolean}
-         */
-        isFolderExpanded(folderId) {
-            return this.folderExpandedIds.has(folderId);
-        },
-
-        /**
-         * 切换某个目录的展开/折叠状态。
-         * @param {string} folderId
-         */
-        toggleFolderExpanded(folderId) {
-            if (!folderId) return;
-            if (this.folderExpandedIds.has(folderId)) {
-                this.folderExpandedIds.delete(folderId);
-            } else {
-                this.folderExpandedIds.add(folderId);
-            }
-            this.renderFolderMenu();
-        },
-
-        /**
-         * 根据当前已选目录，自动展开它的祖先链路。
-         * 这样用户重新打开下拉时，能立刻看到当前选中位置。
-         *
-         * @param {string} folderId
-         */
-        expandFolderAncestors(folderId) {
-            if (!folderId) return;
-            const path = findFolderPathById(this.folders, folderId);
-            if (!path) return;
-            path.forEach(id => this.folderExpandedIds.add(id));
-        },
-
-        /**
-         * 统一设置当前选中的 Eagle 文件夹。
-         * 这里会同步：
-         * 1. 原生 select 的 value
-         * 2. 面板内缓存的 folderId
-         * 3. 用户上次选择的持久化记录
-         * 4. 自定义下拉按钮文案 / 选中态
-         *
-         * @param {string} folderId
-         * @param {{persist?: boolean, refreshHint?: boolean}} options
-         */
-        setFolderSelection(folderId, options = {}) {
-            const { persist = true, refreshHint = true } = options;
-            const select = this.getFolderSelect();
-            if (!select) return;
-
-            const normalizedFolderId = Array.from(select.options).some(option => option.value === folderId)
-                ? folderId
-                : '';
-
-            if (select.value !== normalizedFolderId) {
-                select.value = normalizedFolderId;
-            }
-
-            this.selectedFolderIds = normalizedFolderId ? [String(normalizedFolderId)] : [];
-            this.folderId = normalizedFolderId;
-
-            if (persist) {
-                try {
-                    GM_setValue(STORAGE_KEYS.lastFolderId, normalizedFolderId || '');
-                    GM_setValue(STORAGE_KEYS.folderIds, this.selectedFolderIds);
-                } catch (err) {
-                    Log.warn('保存上次文件夹选择失败:', err.message);
-                }
-            }
-
-            this.expandFolderAncestors(normalizedFolderId);
-            this.syncFolderTriggerLabel();
-            this.renderFolderMenu();
-        },
-
-        /** 切换一个文件夹的勾选状态，贴合 Eagle 官方采集器的多选行为。 */
-        toggleFolderSelection(folderId) {
-            const normalized = String(folderId || '').trim();
-            if (!normalized) {
-                this.selectedFolderIds = [];
-                this.folderId = '';
-            } else if (this.selectedFolderIds.includes(normalized)) {
-                this.selectedFolderIds = this.selectedFolderIds.filter(id => id !== normalized);
-                this.folderId = this.selectedFolderIds[0] || '';
-            } else {
-                this.selectedFolderIds = [...this.selectedFolderIds, normalized];
-                this.folderId = normalized;
-            }
-            const select = this.getFolderSelect();
-            if (select) select.value = this.folderId || '';
-            try {
-                GM_setValue(STORAGE_KEYS.lastFolderId, this.folderId || '');
-                GM_setValue(STORAGE_KEYS.folderIds, this.selectedFolderIds);
-            } catch (err) {
-                Log.warn('保存文件夹多选失败:', err.message);
-            }
-            this.expandFolderAncestors(normalized);
-            this.syncFolderTriggerLabel();
-            this.renderFolderMenu();
-        },
-
-        /**
-         * 同步自定义下拉触发按钮上的当前目录名称。
-         */
-        syncFolderTriggerLabel() {
-            const triggerText = this.container.querySelector('#esp-folder-trigger-text');
-            const trigger = this.getFolderTrigger();
-            const fullName = this.getSelectedFolderName();
-            if (triggerText) {
-                triggerText.textContent = fullName;
-                triggerText.title = fullName;
-            }
-            if (trigger) {
-                trigger.title = fullName;
-                trigger.setAttribute('aria-expanded', this.getFolderWrap()?.classList.contains('open') ? 'true' : 'false');
-            }
-        },
-
-        /**
-         * 根据原生 select 中的 option 列表，重绘自定义下拉菜单。
-         * 这样无论是首次加载文件夹列表，还是运行过程中自动创建了新文件夹，
-         * 都能立即反映到 UI 上。
-         */
-        renderFolderMenu() {
-            const select = this.getFolderSelect();
-            const tree = this.getFolderTree();
-            const searchInput = this.getFolderSearchInput();
-            const recent = document.getElementById('esp-folder-recent');
-            if (!select || !tree) return;
-
-            if (searchInput && searchInput.value !== this.folderSearchKeyword) {
-                searchInput.value = this.folderSearchKeyword;
-            }
-
-            const currentValue = select.value || '';
-            const keyword = String(this.folderSearchKeyword || '').trim().toLowerCase();
-            tree.innerHTML = '';
-            if (recent) {
-                recent.innerHTML = '';
-                    const current = this.getSelectedFolderIds().map(id => flattenFolders(this.folders).find(folder => folder.id === id)).filter(Boolean);
-                    recent.classList.toggle('has-items', current.length > 0 && !keyword);
-                    if (current.length > 0 && !keyword) {
-                        const chip = document.createElement('button');
-                        chip.type = 'button';
-                        chip.className = 'esp-recent-chip';
-                        chip.textContent = current.length > 1 ? `最近：${current.length} 个文件夹` : `最近：${current[0].name}`;
-                        chip.title = current.map(folder => folder.name).join('、');
-                        chip.addEventListener('click', () => { this.syncFolderTriggerLabel(); });
-                        recent.appendChild(chip);
-                }
-            }
-
-            /**
-             * 直接使用 Eagle API 返回的 children 树。
-             * 不再通过 select 文本中的空格反推层级，因为原生 select 会折叠前导空格，
-             * 这正是目录“堆在一起”的根因；同时不做任何排序，保持 Eagle 原始顺序。
-             */
-            const normalizeFolderNodes = (folders = [], depth = 0) => (Array.isArray(folders) ? folders : [])
-                .filter(folder => folder && folder.id)
-                .map(folder => ({
-                    id: String(folder.id),
-                    label: String(folder.name || '').trim() || '未命名文件夹',
-                    depth,
-                    children: normalizeFolderNodes(folder.children, depth + 1),
-                }));
-            const folderNodes = normalizeFolderNodes(this.folders);
-
-            const appendOptionNode = (node, depth, container, forceExpand = false) => {
-                const folderName = String(node.label || '').trim() || '未命名文件夹';
-                const children = Array.isArray(node.children) ? node.children : [];
-                const lowerName = folderName.toLowerCase();
-
-                let childMatched = false;
-                const childMatchFlags = children.map(child => {
-                    const matched = isFolderMatched(child);
-                    if (matched) childMatched = true;
-                    return matched;
-                });
-
-                const selfMatched = !keyword || lowerName.includes(keyword);
-                const visible = selfMatched || childMatched;
-                if (!visible) return false;
-
-                const item = document.createElement('div');
-                item.className = 'esp-folder-option' + (this.getSelectedFolderIds().includes(node.id) ? ' active' : '');
-                item.setAttribute('role', 'treeitem');
-                item.setAttribute('aria-selected', this.getSelectedFolderIds().includes(node.id) ? 'true' : 'false');
-                const checkbox = document.createElement('button');
-                checkbox.type = 'button';
-                checkbox.className = 'esp-folder-option-checkbox' + (this.getSelectedFolderIds().includes(node.id) ? ' checked' : '');
-                checkbox.setAttribute('aria-label', (this.getSelectedFolderIds().includes(node.id) ? '取消选择' : '选择') + '文件夹 ' + folderName);
-                checkbox.innerHTML = this.getSelectedFolderIds().includes(node.id) ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.2l3.1 3.1 6.5-6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '';
-                checkbox.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    this.toggleFolderSelection(node.id);
-                });
-                item.appendChild(checkbox);
-                const icon = document.createElement('span');
-                icon.className = 'esp-folder-option-icon';
-                icon.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.6h5l1.5 1.8h7.9v7.1a1.8 1.8 0 0 1-1.8 1.8H4.6a1.8 1.8 0 0 1-1.8-1.8V5.6Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/></svg>';
-                item.appendChild(icon);
-                item.style.paddingLeft = `${10 + (depth * 14)}px`;
-
-                if (children.length > 0) {
-                    const toggle = document.createElement('span');
-                    const expanded = forceExpand || this.isFolderExpanded(node.id) || !!keyword;
-                    toggle.className = 'esp-folder-option-toggle' + (expanded ? ' expanded' : '');
-                    toggle.innerHTML = `
-                        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
-                            <path d="M4 2.5L8 6L4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    `;
-                    toggle.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.toggleFolderExpanded(node.id);
-                    });
-                    item.appendChild(toggle);
-                } else {
-                    const spacer = document.createElement('span');
-                    spacer.className = 'esp-folder-option-spacer';
-                    item.appendChild(spacer);
-                }
-
-                const label = document.createElement('span');
-                label.className = 'esp-folder-option-label';
-                label.textContent = folderName;
-                label.title = folderName;
-                label.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    if (children.length > 0) this.toggleFolderExpanded(node.id);
-                });
-                item.appendChild(label);
-
-                item.addEventListener('click', (event) => {
-                    if (event.target === item && children.length > 0) {
-                        this.toggleFolderExpanded(node.id);
-                    }
-                });
-
-                container.appendChild(item);
-
-                const shouldExpand = children.length > 0 && (forceExpand || this.isFolderExpanded(node.id) || !!keyword);
-                if (children.length > 0 && shouldExpand) {
-                    const group = document.createElement('div');
-                    group.className = 'esp-folder-group';
-                    children.forEach((child, index) => {
-                        const childForceExpand = !!keyword && childMatchFlags[index];
-                        appendOptionNode(child, depth + 1, group, childForceExpand);
-                    });
-                    if (group.childElementCount > 0) {
-                        container.appendChild(group);
-                    }
-                }
-
-                return true;
-            };
-
-            const isFolderMatched = (node) => {
-                const folderName = String(node.label || '').trim().toLowerCase();
-                if (!keyword) return true;
-                if (folderName.includes(keyword)) return true;
-                const children = Array.isArray(node.children) ? node.children : [];
-                return children.some(child => isFolderMatched(child));
-            };
-
-            const rootItem = document.createElement('div');
-            const selectedFolderIds = this.getSelectedFolderIds();
-            rootItem.className = 'esp-folder-option' + (selectedFolderIds.length === 0 ? ' active' : '');
-            const rootCheckbox = document.createElement('button');
-            rootCheckbox.type = 'button';
-            rootCheckbox.className = 'esp-folder-option-checkbox' + (selectedFolderIds.length === 0 ? ' checked' : '');
-            rootCheckbox.setAttribute('aria-label', selectedFolderIds.length === 0 ? '当前使用默认根目录' : '选择默认根目录');
-            rootCheckbox.innerHTML = selectedFolderIds.length === 0 ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.2l3.1 3.1 6.5-6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '';
-            rootCheckbox.addEventListener('click', (event) => {
-                event.stopPropagation();
-                this.toggleFolderSelection('');
-            });
-            rootItem.appendChild(rootCheckbox);
-            const rootSpacer = document.createElement('span');
-            rootSpacer.className = 'esp-folder-option-icon';
-            rootSpacer.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.6h5l1.5 1.8h7.9v7.1a1.8 1.8 0 0 1-1.8 1.8H4.6a1.8 1.8 0 0 1-1.8-1.8V5.6Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/></svg>';
-            rootItem.appendChild(rootSpacer);
-            const rootLabel = document.createElement('span');
-            rootLabel.className = 'esp-folder-option-label';
-            rootLabel.textContent = '默认（根目录）';
-            rootItem.appendChild(rootLabel);
-            tree.appendChild(rootItem);
-
-            const beforeCount = tree.childElementCount;
-            folderNodes.forEach(node => appendOptionNode(node, 0, tree, false));
-            if (tree.childElementCount === beforeCount && keyword) {
-                const empty = document.createElement('div');
-                empty.className = 'esp-folder-empty';
-                empty.textContent = '未找到匹配的文件夹';
-                tree.appendChild(empty);
-            }
-        },
-
-        /**
-         * 打开文件夹下拉菜单。
-         */
-        openFolderMenu() {
-            const wrap = this.getFolderWrap();
-            if (!wrap) return;
-            this.closeTagMenu();
-            // wrap 上的 open 驱动触发按钮图标；菜单自身挂在 body 顶层，需单独同步 open
-            wrap.classList.add('open');
-            const menu = document.getElementById('esp-folder-menu');
-            if (menu) menu.classList.add('open');
-            this.positionPickerMenu(menu, this.getFolderTrigger(), 540);
-            window.requestAnimationFrame(() => this.positionOpenPickerMenus());
-            this.syncFolderTriggerLabel();
-            const searchInput = this.getFolderSearchInput();
-            if (searchInput) {
-                searchInput.focus({ preventScroll: true });
-                searchInput.select();
-            }
-        },
-
-        /**
-         * 关闭文件夹下拉菜单。
-         */
-        closeFolderMenu() {
-            const wrap = this.getFolderWrap();
-            document.getElementById('esp-folder-menu')?.classList.remove('open');
-            if (!wrap) return;
-            wrap.classList.remove('open');
-            this.folderSearchKeyword = '';
-            const searchInput = this.getFolderSearchInput();
-            if (searchInput) {
-                searchInput.value = '';
-            }
-            this.renderFolderMenu();
-            this.syncFolderTriggerLabel();
-        },
-
-        /**
-         * 切换文件夹下拉菜单开关状态。
-         */
-        toggleFolderMenu() {
-            const wrap = this.getFolderWrap();
-            if (!wrap) return;
-            if (wrap.classList.contains('open')) {
-                this.closeFolderMenu();
-            } else {
-                this.openFolderMenu();
-            }
-        },
-
-        /**
-         * 获取一次采集真正要写入 Eagle 的标签集合。
-         * 会把页面默认标签与用户手动输入标签合并并去重。
-         * @param {string[]} baseTags
-         * @returns {string[]}
-         */
         buildScanTags(baseTags = []) {
-            const tags = mergeTags(baseTags, this.getManualTags());
-            const manualTags = parseTagsInput(document.getElementById('esp-tags-input')?.value || '');
-            if (manualTags.length > 0) {
-                this.recentTags = mergeTags(manualTags, this.recentTags).slice(0, 24);
-                try { GM_setValue(STORAGE_KEYS.recentTags, this.recentTags); } catch (err) { Log.warn('保存最近标签失败:', err.message); }
-            }
-            return tags;
+            // 手动输入的标签已由库标签选择器并入 selectedTags,这里只做页面标签与已选的合并。
+            return mergeTags(baseTags, this.selectedTags);
         },
 
         /**
@@ -5948,7 +3517,7 @@
             }
 
             const selectedFolderIds = this.getSelectedFolderIds();
-            const manuallySelected = selectedFolderIds[0] || this.container.querySelector('#esp-folder-select')?.value || '';
+            const manuallySelected = selectedFolderIds[0] || '';
 
             if (!this.isAutoFolderEnabled()) {
                 this.folderId = manuallySelected;
@@ -6013,19 +3582,16 @@
 
                 // 重新加载目录树，但恢复用户选择的基础目录，不让自动子目录污染“上次选择”。
                 await this.loadFolders();
-                this.setFolderSelection(manuallySelected, {
-                    persist: false,
-                    refreshHint: false,
-                });
+                if (this.folderPicker && manuallySelected) this.folderPicker.setSelected([manuallySelected]);
             }
 
+            // 单选语义:自动目录只作为本轮写入目标(folderId),不改变用户手动选择。
             this.folderId = found.id;
-            this.selectedFolderIds = Array.from(new Set([found.id, ...selectedFolderIds.filter(id => id !== manuallySelected)]));
             return found.id;
         },
 
         /**
-         * 加载 Eagle 文件夹列表并填充下拉框
+         * 加载 Eagle 文件夹列表并填充选择器
          */
         async loadFolders() {
             const requestId = ++this.connectionCheckId;
@@ -6082,19 +3648,8 @@
             }
 
             this.folders = folderResult.folders;
-            // 首次打开时展开一级目录，保持 Eagle 原始顺序；更深层级按需展开。
-            this.folderExpandedIds = new Set(['', ...this.folders.filter(folder => folder && folder.id).map(folder => folder.id)]);
-            const select = this.container.querySelector('#esp-folder-select');
-            const flatFolders = flattenFolders(this.folders);
-
-            // 清空并填充选项
-            select.innerHTML = '<option value="">默认（根目录）</option>';
-            flatFolders.forEach(folder => {
-                const option = document.createElement('option');
-                option.value = folder.id;
-                option.textContent = `${'　'.repeat(folder.depth)}${folder.name}`;
-                select.appendChild(option);
-            });
+            // 灌入库文件夹选择器(保留 Eagle 原始层级,树内按需展开)
+            if (this.folderPicker) this.folderPicker.setFolders(this.folders);
 
             /**
              * 恢复上次选择的文件夹。
@@ -6119,25 +3674,12 @@
                 }
             }
 
-            const validPreferredIds = preferredFolderIds.filter(id => flatFolders.some(folder => folder.id === id));
-            if (validPreferredIds.length > 0) {
-                this.selectedFolderIds = validPreferredIds;
-                this.folderId = validPreferredIds[0] || '';
-                this.setFolderSelection(validPreferredIds[0], {
-                        persist: false,
-                        refreshHint: false,
-                });
-                this.selectedFolderIds = validPreferredIds;
-                this.folderId = validPreferredIds[0] || '';
-            } else {
-                this.setFolderSelection('', {
-                    persist: false,
-                    refreshHint: false,
-                });
-            }
+            const flatFolders = flattenFolders(this.folders);
+            const validPreferredIds = preferredFolderIds.filter(id => flatFolders.some(folder => folder.id === id)).slice(0, 1);
+            if (this.folderPicker) this.folderPicker.setSelected(validPreferredIds);
+            this.selectedFolderIds = validPreferredIds;
+            this.folderId = validPreferredIds[0] || '';
 
-            this.renderFolderMenu();
-            this.syncFolderTriggerLabel();
             this.updateActionModeUI();
             this.setEagleConnectionStatus('connected');
             this.setStatus(this.isLocalMode() ? '本地下载模式已就绪' : '目录已加载，可以开始采集');
@@ -6404,7 +3946,7 @@
                     return;
                 }
 
-                this.folderId = this.container.querySelector('#esp-folder-select').value;
+                this.folderId = this.getSelectedFolderIds()[0] || '';
                 const pageTags = this.buildScanTags([document.title.split(' - ')[0]].filter(Boolean));
 
                 let successCount = 0;

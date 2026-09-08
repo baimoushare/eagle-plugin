@@ -6,7 +6,7 @@
 
 | 脚本 | 版本 | 适用站点 | 功能 |
 |---|---|---|---|
-| `eagle-fab-collector.user.js` | 1.0.4 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
+| `eagle-fab-collector.user.js` | 1.1.0 | Fab.com | Fab 专用版,批量采集图片/模型预览图,按"英文｜中文"自动建目录,商品名智能提取 |
 | `eagle-web-collector.user.js` | 1.1.15 | Fab.com、E-Hentai、ExHentai | 综合版,批量采集页面图片,自动匹配站点目录与标签 |
 | `eagle-x-collector.user.js` | 1.3.0 | X(Twitter) | 一键下载推文图片/视频/音频,批量采集时间线与"喜欢",三层去重(本地索引 + Eagle 查重 + URL 兜底) |
 | `eagle-douyin-collector.user.js` | 0.5.0 | 抖音网页版 | 批量采集作者作品/喜欢列表的视频与图集,自动滚动加载,三层去重,Eagle 拉取失败自动转本地保存 |
@@ -32,7 +32,7 @@
 ## 版本与同步
 
 - 组件:悬浮启动钮、面板容器(含采集中 running 阴影态)、**文件夹树选择弹层**(搜索+树+多选/单选+动态根目录文案+可选刷新按钮)、**标签选择弹层**(搜索+已选 chips+最近使用+可选分组+勾选列表+手动输入+可选刷新按钮)、进度条、版本徽标
-- 接入状态:抖音版(0.4.1)、X 版(1.2.1)已完整迁移;Fab 版(1.0.2)、综合版(1.1.13)已挂载库并显示版本徽标,面板完整迁移待库补齐折叠面板/模式卡片/连接状态等 fab 专属组件后进行
+- 接入状态:抖音(0.5.0)、X(1.3.0)、Fab(1.1.0,面板+选择器全量迁移,折叠面板/mode卡/连接状态/进度全部组件化)已完整迁移;综合版待迁移(与 Fab 同构)
 - 确认当前版本:面板标题旁的"UI x.y.z"徽标 / 控制台 `window.EagleUI.version`
 - 本地预览:仓库根起 `python -m http.server 8799`,浏览器开 `_tm_tools/ui-preview-eagle-ui.html`(含模拟 Eagle 数据,可点验两个选择器交互)
 - 日常更新:改 `eagle-ui.js` → bump 库版本与四个脚本 `@version` → push → Greasy Fork(Webhook/轮询)同步 Library 与四个脚本 → 用户端 Tampermonkey 更新时重新拉取库

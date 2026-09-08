@@ -40,7 +40,7 @@
     }
 
     /** 库版本号（排查"用户用的是哪版 UI"的依据） */
-    const VERSION = '1.3.0';
+    const VERSION = '1.3.1';
 
     /**
      * 设计令牌 + 组件样式（单一 CSS 文本，注入一次）。
@@ -968,6 +968,81 @@
     transition: opacity 140ms ease, transform 160ms ease;
 }
 .egc-tooltip.visible { opacity: 1; transform: translateY(0); }
+
+
+/* ── 按钮变体(采集动作条) ── */
+.egc-btn.secondary { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.10); }
+.egc-btn.danger { background: rgba(163, 52, 52, 0.42); border-color: rgba(255, 255, 255, 0.08); }
+.egc-btn.full { width: 100%; margin-bottom: 8px; }
+.egc-btn.start {
+    color: #ffffff;
+    border-color: rgba(177, 215, 248, 0.62);
+    background: rgba(118, 151, 183, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 0 0 1px rgba(167, 211, 246, 0.10);
+}
+.egc-btn.start:hover,
+.egc-btn.start:focus-visible {
+    border-color: rgba(205, 231, 255, 0.92);
+    background: rgba(139, 177, 211, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 1px rgba(181, 220, 255, 0.22);
+}
+.egc-btn .egc-btn-label {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.egc-btn-row { display: flex; gap: 6px; margin-bottom: 8px; overflow: hidden; }
+
+/* ── 状态文字行(扫描流程提示/错误) ── */
+.egc-status {
+    font-size: 11px;
+    color: var(--egc-fg-faint);
+    text-align: center;
+    margin-top: 8px;
+    line-height: 1.45;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.egc-status:empty { display: none; }
+.egc-status.error { color: rgba(255, 190, 190, 0.85); }
+
+/* ── 开关行(checkbox 配置项) ── */
+.egc-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 0 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.egc-switch-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: rgba(237, 241, 247, 0.92);
+    line-height: 14px;
+    cursor: default;
+}
+.egc-checkbox { width: 16px; height: 16px; flex: 0 0 16px; accent-color: #dce4f0; cursor: pointer; }
+
+/* ── 配置区禁用态(本地模式下 Eagle 专属配置置灰) ── */
+.egc-config-section.disabled { opacity: 0.52; }
+.egc-config-section.disabled .egc-folder-trigger,
+.egc-config-section.disabled .egc-tag-trigger,
+.egc-config-section.disabled .egc-checkbox { pointer-events: none; }
 
 /* ── 无障碍：用户开启"减少动态效果"时关闭动画 ── */
 @media (prefers-reduced-motion: reduce) {
