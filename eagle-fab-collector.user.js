@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.1.1
+// @version      1.1.2
 // @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
@@ -3666,6 +3666,7 @@
             }
             if (preferredFolderIds.length === 0 && preferredFolderId) preferredFolderIds = [String(preferredFolderId)];
 
+            const flatFolders = flattenFolders(this.folders);
             if (!preferredFolderId) {
                 const growthFolder = flatFolders.find(folder => folder.name === 'Eagle丨成长');
                 if (growthFolder) {
@@ -3674,7 +3675,6 @@
                 }
             }
 
-            const flatFolders = flattenFolders(this.folders);
             const validPreferredIds = preferredFolderIds.filter(id => flatFolders.some(folder => folder.id === id)).slice(0, 1);
             if (this.folderPicker) this.folderPicker.setSelected(validPreferredIds);
             this.selectedFolderIds = validPreferredIds;
