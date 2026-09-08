@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eagle Collector UI
 // @namespace    https://github.com/baimoushare/eagle-plugin
-// @version      1.3.4
+// @version      1.3.5
 // @description  Eagle 采集插件家族共享 UI 设计库（供 @require 引用，不独立运行）
 // @author       laobai
 // @license      Copyright (c) 2026 laobai. All rights reserved.
@@ -49,7 +49,7 @@
     }
 
     /** 库版本号（排查"用户用的是哪版 UI"的依据） */
-    const VERSION = '1.3.4';
+    const VERSION = '1.3.5';
 
     /**
      * 设计令牌 + 组件样式（单一 CSS 文本，注入一次）。
@@ -1923,6 +1923,9 @@
                 wrap.classList.toggle('is-connected', state === 'connected');
                 wrap.classList.toggle('is-disconnected', state === 'disconnected');
                 if (text !== undefined) label.textContent = text;
+                else if (state === 'connected') label.textContent = '已连接';
+                else if (state === 'disconnected') label.textContent = '未连接';
+                else if (state === 'pending') label.textContent = '检测中';
             },
         };
     }
