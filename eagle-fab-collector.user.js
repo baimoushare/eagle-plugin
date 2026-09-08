@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Fab图片批量保存到Eagle
 // @namespace    eagle-fab-collector
-// @version      1.1.6
+// @version      1.1.7
 // @modified      2026-09-08
 // @description  在 Fab.com 页面批量采集图片，可保存到 Eagle 或本地下载，按“英文｜中文”自动建目录
 // @author       laobai
@@ -3269,6 +3269,8 @@
 
         /** 更新顶部 Eagle 连接状态圆点。 */
         setEagleConnectionStatus(state = 'pending') {
+            // 连接灯已迁移为库组件:优先走 connStatus,旧自研元素仅作兜底
+            if (this.connStatus) { this.connStatus.set(state); return; }
             const el = this.container.querySelector('#esp-connection-status');
             if (!el) return;
 
